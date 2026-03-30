@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, render_template, request
+import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -396,46 +397,93 @@ def scan_cpa(target: dict[str, Any]) -> dict[str, Any]:
     return {'returncode': proc.returncode, 'stdout': proc.stdout[-4000:], 'stderr': proc.stderr[-4000:]}
 
 
+def fetch_cpa_auth_files(target: dict[str, Any]) -> list[dict[str, Any]]:
+    url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files"
+    r = requests.get(url, headers={'x-management-key': target['token']}, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    return data.get('files', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+
+
+def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
+    raw_status = str(item.get('status') or '').lower()
+    msg = str(item.get('status_message') or '')
+    msg_lower = msg.lower()
+    is_401 = ('401' in msg_lower) or ('unauthorized' in msg_lower) or ('invalid_api_key' in msg_lower) or ('token_expired' in msg_lower)
+    is_limit = ('usage_limit_reached' in msg_lower) or ('rate_limit' in msg_lower) or ('quota' in msg_lower) or ('limit' in msg_lower and not is_401)
+    remaining_ratio = None
+    if is_limit:
+        remaining_ratio = 0.0
+    elif raw_status in {'ok', 'active', 'ready'} and not item.get('unavailable'):
+        remaining_ratio = 100.0
+    elif raw_status == 'error' and not is_401 and not is_limit:
+        remaining_ratio = 5.0
+    else:
+        remaining_ratio = 100.0 if not item.get('unavailable') else 0.0
+    return {
+        'name': item.get('name') or item.get('id'),
+        'email': item.get('email') or item.get('account') or item.get('label') or item.get('name'),
+        'disabled': bool(item.get('disabled')),
+        'invalid_401': bool(is_401),
+        'quota_limited': bool(is_limit),
+        'remaining_ratio': round(float(remaining_ratio or 0), 2),
+        'status': raw_status or ('401' if is_401 else 'limit' if is_limit else 'unknown'),
+        'status_message': msg,
+    }
+
+
 def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
-    db = cpa_db_path(target['id'])
     summary = {
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'disabled': 0, 'healthy': 0,
         'used_ratio': 0, 'remaining_ratio': 0, 'accounts': [], 'last_run': None,
     }
-    if not db.exists():
-        return summary
-    conn = sqlite3.connect(db)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    rows = [dict(r) for r in cur.execute("SELECT * FROM auth_accounts ORDER BY updated_at DESC, name").fetchall()]
-    if rows:
-        summary['total'] = len(rows)
-        summary['invalid_401'] = sum(1 for r in rows if r.get('is_invalid_401'))
-        summary['quota_limited'] = sum(1 for r in rows if r.get('is_quota_limited'))
-        summary['disabled'] = sum(1 for r in rows if r.get('disabled'))
-        summary['healthy'] = sum(1 for r in rows if not r.get('is_invalid_401') and not r.get('is_quota_limited'))
-        ratios = [r.get('quota_remaining_ratio') for r in rows if r.get('quota_remaining_ratio') is not None]
-        if not ratios:
-            ratios = [r.get('usage_remaining_ratio') for r in rows if r.get('usage_remaining_ratio') is not None]
-        if ratios:
-            remaining = max(0.0, min(1.0, sum(ratios) / len(ratios)))
-            summary['remaining_ratio'] = round(remaining * 100, 2)
-            summary['used_ratio'] = round((1 - remaining) * 100, 2)
-        summary['accounts'] = [{
-            'name': r.get('name'),
-            'email': r.get('email'),
-            'disabled': bool(r.get('disabled')),
-            'invalid_401': bool(r.get('is_invalid_401')),
-            'quota_limited': bool(r.get('is_quota_limited')),
-            'remaining_ratio': round(((r.get('quota_remaining_ratio') if r.get('quota_remaining_ratio') is not None else r.get('usage_remaining_ratio')) or 0) * 100, 2),
-            'status': r.get('status') or 'unknown',
-        } for r in rows[:200]]
-    run = cur.execute("SELECT * FROM scan_runs ORDER BY run_id DESC LIMIT 1").fetchone()
-    if run:
-        summary['last_run'] = dict(run)
-    conn.close()
+    accounts: list[dict[str, Any]] = []
+    try:
+        files = fetch_cpa_auth_files(target)
+        accounts = [classify_cpa_file(item) for item in files]
+        summary['last_run'] = {'source': 'management-auth-files', 'count': len(accounts)}
+    except Exception:
+        db = cpa_db_path(target['id'])
+        if db.exists():
+            conn = sqlite3.connect(db)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            rows = [dict(r) for r in cur.execute("SELECT * FROM auth_accounts ORDER BY updated_at DESC, name").fetchall()]
+            accounts = [{
+                'name': r.get('name'),
+                'email': r.get('email'),
+                'disabled': bool(r.get('disabled')),
+                'invalid_401': bool(r.get('is_invalid_401')),
+                'quota_limited': bool(r.get('is_quota_limited')),
+                'remaining_ratio': round(((r.get('quota_remaining_ratio') if r.get('quota_remaining_ratio') is not None else r.get('usage_remaining_ratio')) or 0) * 100, 2),
+                'status': r.get('status') or 'unknown',
+                'status_message': r.get('status_message') or '',
+            } for r in rows]
+            run = cur.execute("SELECT * FROM scan_runs ORDER BY run_id DESC LIMIT 1").fetchone()
+            if run:
+                summary['last_run'] = dict(run)
+            conn.close()
+
+    if accounts:
+        summary['total'] = len(accounts)
+        summary['invalid_401'] = sum(1 for r in accounts if r.get('invalid_401'))
+        summary['quota_limited'] = sum(1 for r in accounts if r.get('quota_limited'))
+        summary['disabled'] = sum(1 for r in accounts if r.get('disabled'))
+        summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited'))
+        remaining_values = [float(r.get('remaining_ratio') or 0) for r in accounts]
+        if remaining_values:
+            summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
+            summary['used_ratio'] = round(100 - summary['remaining_ratio'], 2)
+        summary['accounts'] = accounts[:200]
     return summary
+
+
+def delete_cpa_auth_file(target: dict[str, Any], name: str) -> dict[str, Any]:
+    from urllib.parse import quote
+    url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files?name={quote(name, safe='')}"
+    r = requests.delete(url, headers={'x-management-key': target['token']}, timeout=30)
+    return {'ok': r.ok, 'status_code': r.status_code, 'text': r.text[:500]}
 
 
 @app.get('/')
@@ -501,6 +549,34 @@ def api_scan_cpas():
         result = scan_cpa(target)
         results.append({'id': target['id'], 'name': target['name'], **result})
     return jsonify({'results': results, 'cpas': [cpa_summary(t) for t in load_cpas()]})
+
+
+@app.delete('/api/cpas/<cpa_id>/auth-files/<path:file_name>')
+def api_delete_cpa_auth_file(cpa_id: str, file_name: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    result = delete_cpa_auth_file(target, file_name)
+    code = 200 if result.get('ok') else 500
+    return jsonify({'result': result, 'cpa': cpa_summary(target)}), code
+
+
+@app.post('/api/cpas/<cpa_id>/delete-401')
+def api_delete_cpa_401(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    summary = cpa_summary(target)
+    deleted = []
+    failed = []
+    for acc in summary.get('accounts', []):
+        if acc.get('invalid_401'):
+            res = delete_cpa_auth_file(target, acc.get('name') or acc.get('email') or '')
+            if res.get('ok'):
+                deleted.append(acc.get('name') or acc.get('email'))
+            else:
+                failed.append({'account': acc.get('name') or acc.get('email'), 'result': res})
+    return jsonify({'deleted': deleted, 'failed': failed, 'cpa': cpa_summary(target)})
 
 
 @app.get('/api/history')

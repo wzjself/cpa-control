@@ -12,20 +12,20 @@
     <header class="hero">
       <div>
         <h1>服务器总览 😼</h1>
-        <p>服务器指标 + CPA 扫描 + clirelay 仪表盘</p>
+        <p>服务器指标 + CPA 状态 + clirelay 仪表盘</p>
       </div>
       <button id="refreshAllBtn">刷新全部</button>
     </header>
 
-    <section class="grid metrics-grid">
-      <div class="card stat-card"><div class="label">健康度</div><div class="value" id="healthScore">--</div></div>
-      <div class="card stat-card"><div class="label">CPU</div><div class="value" id="cpuNow">--</div></div>
-      <div class="card stat-card"><div class="label">内存</div><div class="value" id="memNow">--</div></div>
-      <div class="card stat-card"><div class="label">磁盘</div><div class="value" id="diskNow">--</div></div>
-      <div class="card stat-card"><div class="label">24h 下载/上传</div><div class="value small" id="trafficNow">--</div></div>
+    <section class="compact-overview card">
+      <div class="compact-item"><span class="label">健康</span><strong id="healthScore">--</strong></div>
+      <div class="compact-item"><span class="label">CPU</span><strong id="cpuNow">--</strong></div>
+      <div class="compact-item"><span class="label">内存</span><strong id="memNow">--</strong></div>
+      <div class="compact-item"><span class="label">磁盘</span><strong id="diskNow">--</strong></div>
+      <div class="compact-item wide"><span class="label">下载 / 上传</span><strong id="trafficNow">--</strong></div>
     </section>
 
-    <section class="grid charts-grid">
+    <section class="grid charts-grid tighter">
       <div class="card chart-card">
         <div class="chart-head">
           <h3 id="usageChartTitle">CPU / 内存 / 磁盘（24小时）</h3>
@@ -39,7 +39,10 @@
         </div>
         <canvas id="usageChart"></canvas>
       </div>
-      <div class="card chart-card"><h3 id="trafficChartTitle">网络累计流量（24小时）</h3><canvas id="trafficChart"></canvas></div>
+      <div class="card chart-card">
+        <h3 id="trafficChartTitle">网络上行 / 下载历史（24小时）</h3>
+        <canvas id="trafficChart"></canvas>
+      </div>
     </section>
 
     <section class="grid two-col">
@@ -51,18 +54,20 @@
       <div class="section-head">
         <div>
           <h3>CPA 管理</h3>
-          <p>导入不同 CPA，统一扫描凭证状态与剩余额度</p>
+          <p>直接读取 CPA 后台 auth-files 状态，区分 limit 与 401</p>
         </div>
         <button id="scanCpasBtn">刷新并扫描全部 CPA</button>
       </div>
-      <form id="cpaForm" class="cpa-form">
+
+      <div id="cpaList" class="cpa-list"></div>
+
+      <form id="cpaForm" class="cpa-form below-form">
         <input name="name" placeholder="CPA 名称">
         <input name="base_url" placeholder="CPA 链接，例如 http://1.2.3.4:25836">
         <input name="token" placeholder="管理密码 / token">
         <select name="provider"><option value="codex">codex</option></select>
         <button type="submit">添加 CPA</button>
       </form>
-      <div id="cpaList" class="cpa-list"></div>
     </section>
   </div>
   <script src="/static/app.js"></script>

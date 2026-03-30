@@ -15,7 +15,6 @@ const els = {
   cpaList: document.getElementById('cpaList'),
   usageChartTitle: document.getElementById('usageChartTitle'),
   trafficChartTitle: document.getElementById('trafficChartTitle'),
-  timeRangeSwitch: document.getElementById('timeRangeSwitch'),
 };
 
 const fmtPct = n => `${Number(n || 0).toFixed(1)}%`;
@@ -39,40 +38,21 @@ function chartLabels(history) {
   return history.map(x => (x.ts || '').slice(11, 16));
 }
 
-function destroyCharts() {
-  if (usageChart) { usageChart.destroy(); usageChart = null; }
-  if (trafficChart) { trafficChart.destroy(); trafficChart = null; }
-}
-
 function renderUsageChart(historyRaw) {
   const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
   const canvas = document.getElementById('usageChart');
-  if (!canvas) return;
-  if (!history.length) {
-    destroyCharts();
-    return;
-  }
-  const labels = chartLabels(history);
+  if (!canvas || !history.length) return;
   const config = {
     type: 'line',
     data: {
-      labels,
+      labels: chartLabels(history),
       datasets: [
         {label: 'CPU', data: history.map(x => x.cpu_percent), borderColor: '#60a5fa', tension: .25, pointRadius: 0},
         {label: '内存', data: history.map(x => x.mem_percent), borderColor: '#34d399', tension: .25, pointRadius: 0},
         {label: '磁盘', data: history.map(x => x.disk_percent), borderColor: '#f59e0b', tension: .25, pointRadius: 0},
       ]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      resizeDelay: 200,
-      parsing: false,
-      normalized: true,
-      plugins: { legend: { display: true } },
-      scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: true, max: 100 } }
-    }
+    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200, parsing:false, normalized:true, scales:{x:{ticks:{maxTicksLimit:8}},y:{beginAtZero:true,max:100}}}
   };
   if (usageChart) usageChart.destroy();
   usageChart = new Chart(canvas, config);
@@ -81,30 +61,17 @@ function renderUsageChart(historyRaw) {
 function renderTrafficChart(historyRaw) {
   const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
   const canvas = document.getElementById('trafficChart');
-  if (!canvas) return;
-  if (!history.length) {
-    if (trafficChart) { trafficChart.destroy(); trafficChart = null; }
-    return;
-  }
-  const labels = chartLabels(history);
+  if (!canvas || !history.length) return;
   const config = {
     type: 'line',
     data: {
-      labels,
+      labels: chartLabels(history),
       datasets: [
-        {label: '下载累计 MB', data: history.map(x => x.net_rx_mb), borderColor: '#22c55e', tension: .25, pointRadius: 0},
-        {label: '上传累计 MB', data: history.map(x => x.net_tx_mb), borderColor: '#f472b6', tension: .25, pointRadius: 0},
+        {label: '下载', data: history.map(x => x.net_rx_mb), borderColor: '#22c55e', tension: .25, pointRadius: 0},
+        {label: '上传', data: history.map(x => x.net_tx_mb), borderColor: '#f472b6', tension: .25, pointRadius: 0},
       ]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      resizeDelay: 200,
-      parsing: false,
-      normalized: true,
-      scales: { x: { ticks: { maxTicksLimit: 8 } } }
-    }
+    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200, parsing:false, normalized:true, scales:{x:{ticks:{maxTicksLimit:8}}}}
   };
   if (trafficChart) trafficChart.destroy();
   trafficChart = new Chart(canvas, config);
@@ -137,12 +104,16 @@ function renderRelayStats(data) {
     <div class="relay-item">输入 / 输出 / 缓存：<strong>${fmtNum(data.input_tokens)} / ${fmtNum(data.output_tokens)} / ${fmtNum(data.cached_tokens)}</strong></div>
     <div class="relay-item">认证文件 / 提供商：<strong>${fmtNum(counts.auth_files || 0)} / ${fmtNum(counts.providers_total || 0)}</strong></div>
     <div class="relay-item">clirelay 进程 CPU / 内存：<strong>${Number(system.process_cpu_pct || 0).toFixed(1)}% / ${Number(system.process_mem_pct || 0).toFixed(1)}%</strong></div>
-    <div class="relay-item">clirelay 总入站 / 出站：<strong>${fmtMb((system.net_bytes_recv || 0)/1024/1024)} / ${fmtMb((system.net_bytes_sent || 0)/1024/1024)}</strong></div>
   ` + topKeys.map(x => `
-    <div class="relay-item"><strong>${x.name || x.api_key_name || '未命名'}</strong><div class="muted">请求 ${fmtNum(x.requests)} · Token ${fmtNum(x.tokens || x.total_tokens)}${x.success_count !== undefined ? ` · 成功 ${fmtNum(x.success_count)}` : ''}</div></div>
+    <div class="relay-item"><strong>${x.name || x.api_key_name || '未命名'}</strong><div class="muted">请求 ${fmtNum(x.requests)} · Token ${fmtNum(x.tokens || x.total_tokens)}</div></div>
   `).join('');
 }
 
+function accountStatusText(acc) {
+  if (acc.invalid_401) return '401';
+  if (acc.quota_limited) return 'limit';
+  return acc.status || 'unknown';
+}
 function accountStatusClass(acc) {
   if (acc.invalid_401) return 'err';
   if (acc.quota_limited) return 'warn';
@@ -157,30 +128,34 @@ function renderCpas(cpas) {
           <div><strong>${cpa.name}</strong> <span class="badge">${cpa.provider}</span></div>
           <div class="muted">${cpa.base_url}</div>
         </div>
-        <button class="danger" onclick="deleteCpa('${cpa.id}')">删除 CPA</button>
+        <div class="cpa-actions">
+          <button class="ghost small-btn" onclick="delete401('${cpa.id}')">一键删除401</button>
+          <button class="danger small-btn" onclick="deleteCpa('${cpa.id}')">删除 CPA</button>
+        </div>
       </div>
       <div class="mini-grid">
         <div class="mini-stat"><div class="muted">总凭证</div><div class="n">${fmtNum(cpa.total)}</div></div>
         <div class="mini-stat"><div class="muted">401</div><div class="n err">${fmtNum(cpa.invalid_401)}</div></div>
-        <div class="mini-stat"><div class="muted">限额</div><div class="n warn">${fmtNum(cpa.quota_limited)}</div></div>
+        <div class="mini-stat"><div class="muted">limit</div><div class="n warn">${fmtNum(cpa.quota_limited)}</div></div>
         <div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div>
       </div>
       <div class="quota-row">
         <div class="quota-label"><span>总凭证额度使用情况</span><span>已用 ${cpa.used_ratio || 0}% / 总额度 100%</span></div>
         <div class="progress used"><span style="width:${cpa.used_ratio || 0}%"></span></div>
       </div>
-      <div class="muted" style="margin:10px 0">凭证列表（最多展示 200 条）</div>
+      <div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）</div>
       <div class="list">
         ${(cpa.accounts || []).map(acc => `
           <div class="account-row">
             <div class="account-top">
               <strong>${acc.email || acc.name}</strong>
-              <span class="${accountStatusClass(acc)}">${acc.invalid_401 ? '401' : acc.quota_limited ? '限额' : acc.status}</span>
+              <span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span>
             </div>
             <div class="progress"><span style="width:${acc.remaining_ratio || 0}%"></span></div>
-            <div class="muted">剩余估计：${acc.remaining_ratio || 0}% ${acc.disabled ? '· 已禁用' : ''}</div>
+            <div class="muted">剩余估计：${acc.remaining_ratio || 0}%${acc.status_message ? ` · ${acc.status_message}` : ''}</div>
+            <div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除凭证</button></div>
           </div>
-        `).join('') || '<div class="muted">还没有扫描数据，点上面的“刷新并扫描全部 CPA”即可。</div>'}
+        `).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>'}
       </div>
     </div>
   `).join('');
@@ -203,7 +178,7 @@ async function loadAll(forceBust = false) {
   els.diskNow.textContent = fmtPct(server.latest.disk_percent);
   els.trafficNow.textContent = `${fmtMb(server.traffic_24h.rx_mb)} / ${fmtMb(server.traffic_24h.tx_mb)}`;
   els.usageChartTitle.textContent = `CPU / 内存 / 磁盘（${rangeLabel(currentRange)}）`;
-  els.trafficChartTitle.textContent = `网络累计流量（${rangeLabel(currentRange)}）`;
+  els.trafficChartTitle.textContent = `网络上行 / 下载历史（${rangeLabel(currentRange)}）`;
   setActiveRangeBtn();
   renderUsageChart(server.history || []);
   renderTrafficChart(server.history || []);
@@ -217,7 +192,19 @@ async function deleteCpa(id) {
   await fetch(`/api/cpas/${id}`, {method:'DELETE'});
   await loadAll(true);
 }
+async function delete401(id) {
+  if (!confirm('确认一键删除这个 CPA 里的 401 凭证吗？')) return;
+  await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'});
+  await loadAll(true);
+}
+async function deleteAuthFile(cpaId, encodedName) {
+  if (!confirm('确认删除这个凭证吗？')) return;
+  await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'});
+  await loadAll(true);
+}
 window.deleteCpa = deleteCpa;
+window.delete401 = delete401;
+window.deleteAuthFile = deleteAuthFile;
 
 els.refreshAllBtn.addEventListener('click', () => loadAll(true));
 els.scanCpasBtn.addEventListener('click', async () => {
@@ -252,6 +239,5 @@ els.cpaForm.addEventListener('submit', async (e) => {
   await loadAll(true);
 });
 
-// 进入页面先强制刷新一次最新数据
 loadAll(true);
 setInterval(() => loadAll(true), 60000);
