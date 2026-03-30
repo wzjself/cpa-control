@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>服务器总览</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330t">
-  <script src="/static/vendor/chart.umd.js?v=20260330t"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260330u">
+  <script src="/static/vendor/chart.umd.js?v=20260330u"></script>
 </head>
 <body>
   <div class="container">
@@ -14,7 +14,7 @@
         <h1>服务器总览 😼</h1>
         <p>服务器指标 + CPA 状态 + clirelay 仪表盘</p>
       </div>
-      <button id="refreshAllBtn">刷新全部</button>
+      <div class="hero-actions"><button id="refreshServerBtn">刷新服务器状态</button><button id="refreshAllBtn">刷新全部</button></div>
     </header>
 
     <section class="compact-overview card">
@@ -45,36 +45,6 @@
       </div>
     </section>
 
-    <section class="grid two-col compact-panels">
-      <div class="card compact-panel">
-        <div class="panel-head"><h3>前五高占用进程</h3><span class="muted small-note">可滚动</span></div>
-        <div id="processList" class="list compact-scroll"></div>
-      </div>
-      <div class="card compact-panel">
-        <div class="panel-head"><h3>clirelay 总览</h3><span class="muted small-note">可滚动</span></div>
-        <div id="relayStats" class="stats-list compact-scroll"></div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="section-head">
-        <div>
-          <h3>CPA 管理</h3>
-          <p>直接读取 CPA 后台 auth-files 状态，区分 limit 与 401</p>
-        </div>
-        <button id="scanCpasBtn">刷新并扫描全部 CPA</button>
-      </div>
-
-      <div id="cpaList" class="cpa-list"></div>
-
-      <form id="cpaForm" class="cpa-form below-form">
-        <input name="name" placeholder="CPA 名称">
-        <input name="base_url" placeholder="CPA 链接，例如 http://1.2.3.4:25836">
-        <input name="token" placeholder="管理密码 / token">
-        <select name="provider"><option value="codex">codex</option></select>
-        <button type="submit">添加 CPA</button>
-      </form>
-    </section>
 
     <section class="card">
       <div class="section-head">
@@ -108,7 +78,27 @@
       <div id="credentialStoreList" class="credential-store-list"></div>
     </section>
 
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h3>CPA 管理</h3>
+          <p>直接读取 CPA 后台 auth-files 状态，区分 limit 与 401</p>
+        </div>
+        <button id="scanCpasBtn">刷新并扫描全部 CPA</button>
+      </div>
+
+      <div id="cpaList" class="cpa-list"></div>
+
+      <form id="cpaForm" class="cpa-form below-form">
+        <input name="name" placeholder="CPA 名称">
+        <input name="base_url" placeholder="CPA 链接，例如 http://1.2.3.4:25836">
+        <input name="token" placeholder="管理密码 / token">
+        <select name="provider"><option value="codex">codex</option></select>
+        <button type="submit">添加 CPA</button>
+      </form>
+    </section>
+
   </div>
-  <script src="/static/app.js?v=20260330t"></script>
+  <script src="/static/app.js?v=20260330u"></script>
 </body>
 </html>
