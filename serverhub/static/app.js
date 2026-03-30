@@ -112,9 +112,13 @@ function renderRelayStats(data) {
 }
 
 function accountStatusText(acc) {
-  if (acc.invalid_401) return '401';
-  if (acc.quota_limited) return 'limit';
-  return acc.status || 'unknown';
+  if (acc.invalid_401) return '401失效';
+  if (acc.quota_limited) return '额度耗尽';
+  const status = String(acc.status || '').toLowerCase();
+  if (status === 'active') return '正常';
+  if (status === 'disabled') return '已禁用';
+  if (status === 'error') return '异常';
+  return status ? status : '未知';
 }
 function accountStatusClass(acc) {
   if (acc.invalid_401) return 'err';
