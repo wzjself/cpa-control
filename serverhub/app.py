@@ -462,6 +462,27 @@ def cpa_log_path(cpa_id: str) -> Path:
     return DATA_DIR / f'cpa_{cpa_id}.log'
 
 
+def cpa_snapshot_path(cpa_id: str) -> Path:
+    return DATA_DIR / f'cpa_{cpa_id}_snapshot.json'
+
+
+def load_cpa_snapshot(cpa_id: str) -> dict[str, Any] | None:
+    path = cpa_snapshot_path(cpa_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def save_cpa_snapshot(cpa_id: str, summary: dict[str, Any]) -> None:
+    payload = dict(summary)
+    payload['snapshot_saved_at'] = now_iso()
+    cpa_snapshot_path(cpa_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
 def write_cpa_config(target: dict[str, Any]) -> None:
     conf = {
         'base_url': target['base_url'],
@@ -790,6 +811,19 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
 
 
 def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
+    if not live:
+        snapshot = load_cpa_snapshot(target['id'])
+        if snapshot:
+            snapshot['id'] = target['id']
+            snapshot['name'] = target['name']
+            snapshot['base_url'] = target['base_url']
+            snapshot['provider'] = target['provider']
+            usage_stats = get_cpa_usage_stats(target)
+            snapshot['request_count'] = usage_stats['request_count']
+            snapshot['total_tokens'] = usage_stats['total_tokens']
+            snapshot['usage_matched_by'] = usage_stats['matched_by']
+            return snapshot
+
     summary = {
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'disabled': 0, 'healthy': 0,
@@ -859,6 +893,9 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
             summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
             summary['used_ratio'] = round(100 - summary['remaining_ratio'], 2)
         summary['accounts'] = accounts[:200]
+
+    if live and accounts:
+        save_cpa_snapshot(target['id'], summary)
     return summary
 
 def upload_cpa_auth_file(target: dict[str, Any], file_name: str, content: str) -> dict[str, Any]:
