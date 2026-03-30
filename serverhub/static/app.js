@@ -119,7 +119,7 @@ function renderCredentialStore(credentials = [], cpas = []) {
       </div>
       <div class="muted">上传 ${fmtTime(item.uploaded_at)}</div>
       <div class="muted">最近投放：${item.last_target_name ? `${esc(item.last_target_name)} · ${fmtTime(item.last_used_at)}` : '暂无'}</div>
-      <div class="cred-status ${item.uploaded_to_cpa ? 'ok' : 'pending'}">${item.uploaded_to_cpa ? '<span class="cred-check">√</span><span>已上传</span>' : '<span>未上传</span>'}</div>
+      <div class="cred-status ${item.uploaded_to_cpa && item.upload_status_text === '可用 / 限额' ? 'ok' : (item.uploaded_to_cpa ? 'bad' : 'pending')}">${item.uploaded_to_cpa ? (item.upload_status_text === '可用 / 限额' ? '<span class=\"cred-check\">√</span><span>绿色：可用 / 限额</span>' : `<span>红色：${esc(item.upload_status_text || '异常')}</span>${item.upload_error_detail ? `<span class=\"muted\"> · ${esc(item.upload_error_detail)}</span>` : ''}`) : '<span>未上传</span>'}</div>
       <div class="credential-actions"><button type="button" class="danger small-btn" onclick="deleteCredential('${item.id}')">删除</button></div>
     </label>
   `).join('') || '<div class="muted">没有匹配的凭证。</div>';
@@ -144,7 +144,7 @@ async function deploySelectedCredentials() { const run = async () => { const tar
 async function addCpa(e) { e.preventDefault(); const fd = new FormData(els.cpaForm); const payload = Object.fromEntries(fd.entries()); await fetch('/api/cpas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}); els.cpaForm.reset(); await loadAll(true); }
 async function scanCpas() { const run = async () => { await fetch('/api/cpas/scan', {method:'POST'}); await loadAll(true); }; return withButtonLoading(els.scanCpasBtn, '扫描中...', run)(); }
 async function refreshAll() { const run = async () => { await loadAll(true); }; return withButtonLoading(els.refreshAllBtn, '刷新中...', run)(); }
-async function syncCredentialStatus() { const run = async () => { const res = await fetch('/api/credentials/sync-upload-status', { method:'POST' }); const data = await res.json(); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); alert(`状态已更新：匹配到 ${data.matched || 0} 个已上传凭证`); }; return withButtonLoading(els.syncCredentialStatusBtn, '更新中...', run)(); }
+async function syncCredentialStatus() { const run = async () => { const targetId = els.credentialTargetSelect?.value || ''; if (!targetId) return alert('先选择目标 CPA'); const res = await fetch('/api/credentials/sync-upload-status', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId }) }); const data = await res.json(); if (!res.ok) return alert(data.error || '同步失败'); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); alert(`状态已更新：当前 CPA 匹配到 ${data.matched || 0} 个凭证`); }; return withButtonLoading(els.syncCredentialStatusBtn, '更新中...', run)(); }
 async function refreshServerOnly() { const run = async () => { await loadServerStatus(true); }; return withButtonLoading(els.refreshServerBtn, '刷新中...', run)(); }
 window.deleteCpa = deleteCpa; window.refreshCpa = refreshCpa; window.delete401 = delete401; window.deleteAuthFile = deleteAuthFile; window.toggleCredentialSelect = toggleCredentialSelect; window.deleteCredential = deleteCredential;
 els.cpaForm?.addEventListener('submit', addCpa);

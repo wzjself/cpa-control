@@ -100,11 +100,16 @@ def init_db() -> None:
             last_used_at TEXT,
             last_target_id TEXT,
             uploaded_to_cpa INTEGER NOT NULL DEFAULT 0,
+            upload_status_text TEXT NOT NULL DEFAULT '',
+            upload_error_detail TEXT NOT NULL DEFAULT '',
             archived INTEGER NOT NULL DEFAULT 0
         );
         """
     )
-    conn.execute("ALTER TABLE credential_store ADD COLUMN uploaded_to_cpa INTEGER NOT NULL DEFAULT 0") if 'uploaded_to_cpa' not in [r[1] for r in conn.execute("PRAGMA table_info(credential_store)").fetchall()] else None
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(credential_store)").fetchall()]
+    if 'uploaded_to_cpa' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN uploaded_to_cpa INTEGER NOT NULL DEFAULT 0")
+    if 'upload_status_text' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN upload_status_text TEXT NOT NULL DEFAULT ''")
+    if 'upload_error_detail' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN upload_error_detail TEXT NOT NULL DEFAULT ''")
     conn.commit()
     conn.close()
 
@@ -932,9 +937,11 @@ def api_import_credentials():
             'last_used_at': None,
             'last_target_id': None,
             'uploaded_to_cpa': 0,
+            'upload_status_text': '',
+            'upload_error_detail': '',
             'archived': 0,
         }
-        conn.execute('INSERT INTO credential_store (id,name,filename,content,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,uploaded_to_cpa,archived) VALUES (:id,:name,:filename,:content,:note,:tags,:uploaded_at,:updated_at,:last_used_at,:last_target_id,:uploaded_to_cpa,:archived)', row)
+        conn.execute('INSERT INTO credential_store (id,name,filename,content,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,uploaded_to_cpa,upload_status_text,upload_error_detail,archived) VALUES (:id,:name,:filename,:content,:note,:tags,:uploaded_at,:updated_at,:last_used_at,:last_target_id,:uploaded_to_cpa,:upload_status_text,:upload_error_detail,:archived)', row)
         saved.append({'id': cred_id, 'name': name, 'filename': filename})
     conn.commit()
     conn.close()
@@ -971,7 +978,7 @@ def api_deploy_credentials():
         ok = bool(result.get('ok'))
         results.append({'id': row['id'], 'name': row['name'], 'filename': name, 'ok': ok, 'status_code': result.get('status_code'), 'text': result.get('text'), 'mode': result.get('mode')})
         if ok:
-            conn.execute('UPDATE credential_store SET last_used_at = ?, last_target_id = ?, uploaded_to_cpa = 1, updated_at = ? WHERE id = ?', (now, target_id, now, row['id']))
+            conn.execute('UPDATE credential_store SET last_used_at = ?, last_target_id = ?, uploaded_to_cpa = 1, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (now, target_id, '可用 / 限额', '', now, row['id']))
     conn.commit()
     conn.close()
     return jsonify({'results': results, 'credentials': list_credentials(), 'cpa': cpa_summary(target)})
@@ -1005,7 +1012,7 @@ def api_delete_cpa_auth_file(cpa_id: str, file_name: str):
     result = delete_cpa_auth_file(target, file_name)
     if result.get('ok'):
         conn = get_conn()
-        conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, updated_at = ? WHERE archived = 0 AND last_target_id = ? AND filename = ?', (now_iso(), cpa_id, urllib.parse.unquote(file_name)))
+        conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE archived = 0 AND last_target_id = ? AND filename = ?', ('', '', now_iso(), cpa_id, urllib.parse.unquote(file_name)))
         conn.commit()
         conn.close()
     code = 200 if result.get('ok') else 500
@@ -1034,29 +1041,41 @@ def api_delete_cpa_401(cpa_id: str):
 
 @app.post('/api/credentials/sync-upload-status')
 def api_sync_credential_upload_status():
-    cpas = load_cpas()
+    data = request.get_json(silent=True) or {}
+    target_id = str(data.get('target_id') or '').strip()
+    target = next((x for x in load_cpas() if x['id'] == target_id), None)
+    if not target:
+        return jsonify({'error': '请先选择目标 CPA'}), 400
+    summary = cpa_summary(target)
+    account_map = {}
+    for acc in summary.get('accounts', []):
+        key = (acc.get('email') or acc.get('name') or '').strip().lower()
+        if key:
+            if acc.get('invalid_401'):
+                status_text = '401失效'
+                detail = '401'
+            elif acc.get('quota_limited') or str(acc.get('status') or '').lower() == 'active':
+                status_text = '可用 / 限额'
+                detail = ''
+            else:
+                status_text = '异常'
+                detail = str(acc.get('status_message') or acc.get('status') or '未知异常')
+            account_map[key] = {'good': status_text == '可用 / 限额', 'status_text': status_text, 'detail': detail}
     matched = 0
     conn = get_conn()
     creds = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
-    all_names = {}
-    for cpa in cpas:
-        summary = cpa_summary(cpa)
-        for acc in summary.get('accounts', []):
-            raw_name = (acc.get('email') or acc.get('name') or '').strip()
-            if raw_name:
-                all_names[raw_name.lower()] = cpa['id']
     now = now_iso()
     for row in creds:
         raw = (row.get('name') or row.get('filename') or '').strip().lower()
-        target_id = all_names.get(raw)
-        if target_id:
+        hit = account_map.get(raw)
+        if hit:
             matched += 1
-            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 1, last_target_id = ?, updated_at = ? WHERE id = ?', (target_id, now, row['id']))
+            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 1, last_target_id = ?, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (target_id, hit['status_text'], hit['detail'], now, row['id']))
         else:
-            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, updated_at = ? WHERE id = ?', (now, row['id']))
+            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, last_target_id = ?, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (target_id, '', '', now, row['id']))
     conn.commit()
     conn.close()
-    return jsonify({'ok': True, 'matched': matched, 'credentials': list_credentials(), 'cpas': cpas})
+    return jsonify({'ok': True, 'matched': matched, 'credentials': list_credentials(), 'cpas': load_cpas()})
 
 @app.get('/api/history')
 def api_history():
