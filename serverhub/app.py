@@ -196,6 +196,9 @@ def top_processes(limit: int = 5) -> list[dict[str, Any]]:
 
 
 def compute_health(sample: dict[str, Any], clirelay: dict[str, Any] | None = None) -> int:
+    relay_health = (clirelay or {}).get('health_score')
+    if relay_health is not None:
+        return int(relay_health)
     system = (clirelay or {}).get('system') or {}
     cpu = float(system.get('system_cpu_pct', sample.get('cpu_percent', 0.0)) or 0.0)
     mem = float(system.get('system_mem_pct', sample.get('mem_percent', 0.0)) or 0.0)
@@ -295,17 +298,25 @@ def get_clirelay_summary() -> dict[str, Any]:
             sys_j = system.json()
             auth_j = auth_files.json() if auth_files.ok else {'files': []}
             kpi = dash_j.get('kpi', {})
+            active = sys_j.get('active_concurrency', []) or []
+            rpm_now = sum(int(x.get('rpm', 0) or 0) for x in active)
+            tpm_now = sum(int(x.get('tpm', 0) or 0) for x in active)
+            sys_cpu = float(sys_j.get('system_cpu_pct', 0) or 0)
+            sys_mem = float(sys_j.get('system_mem_pct', 0) or 0)
+            sys_disk = float(sys_j.get('disk_pct', 0) or 0)
+            health_score = int(max(0, min(100, round(100 - (sys_cpu * 0.35 + sys_mem * 0.35 + sys_disk * 0.30)))))
             return {
                 'available': True,
                 'source': 'management-api',
-                'request_count': kpi.get('total_requests', 0),
+                'request_count': int(kpi.get('total_requests', 0) or 0),
                 'success_rate': round(kpi.get('success_rate', 0), 2),
-                'input_tokens': kpi.get('input_tokens', 0),
-                'output_tokens': kpi.get('output_tokens', 0),
-                'cached_tokens': kpi.get('cached_tokens', 0),
-                'total_tokens': kpi.get('total_tokens', 0),
-                'rpm': sys_j.get('total_rpm', 0),
-                'tpm': sys_j.get('total_tpm', 0),
+                'input_tokens': int(kpi.get('input_tokens', 0) or 0),
+                'output_tokens': int(kpi.get('output_tokens', 0) or 0),
+                'cached_tokens': int(kpi.get('cached_tokens', 0) or 0),
+                'total_tokens': int(kpi.get('total_tokens', 0) or 0),
+                'rpm': rpm_now,
+                'tpm': tpm_now,
+                'health_score': health_score,
                 'top_api_keys': chart_j.get('apikey_distribution', []),
                 'recent': [
                     {'minute': x.get('date', ''), 'requests': x.get('requests', 0), 'tokens': (x.get('input_tokens', 0) + x.get('output_tokens', 0))}
