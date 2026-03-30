@@ -860,7 +860,15 @@ def api_scan_cpas():
 
 @app.get('/api/credentials')
 def api_list_credentials():
-    return jsonify({'credentials': list_credentials(), 'cpas': load_cpas()})
+    cpas = load_cpas()
+    cpa_map = {c['id']: c for c in cpas}
+    credentials = []
+    for item in list_credentials():
+        item = dict(item)
+        last_target = cpa_map.get(item.get('last_target_id'))
+        item['last_target_name'] = last_target.get('name') if last_target else None
+        credentials.append(item)
+    return jsonify({'credentials': credentials, 'cpas': cpas})
 
 
 @app.post('/api/credentials/import')
