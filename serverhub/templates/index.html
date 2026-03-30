@@ -29,11 +29,13 @@
       <div class="card chart-card">
         <div class="chart-head">
           <h3 id="usageChartTitle">CPU / 内存 / 磁盘（24小时）</h3>
-          <select id="timeRangeSelect">
-            <option value="24h" selected>24小时</option>
-            <option value="3h">3小时</option>
-            <option value="all">所有时间</option>
-          </select>
+          <div class="range-switch" id="timeRangeSwitch">
+            <button type="button" class="range-btn" data-range="3h">3小时</button>
+            <button type="button" class="range-btn active" data-range="24h">24小时</button>
+            <button type="button" class="range-btn" data-range="7d">7天</button>
+            <button type="button" class="range-btn" data-range="30d">30天</button>
+            <button type="button" class="range-btn" data-range="all">所有时间</button>
+          </div>
         </div>
         <canvas id="usageChart"></canvas>
       </div>

@@ -1,4 +1,5 @@
 let usageChart, trafficChart;
+let currentRange = '24h';
 
 const els = {
   refreshAllBtn: document.getElementById('refreshAllBtn'),
@@ -12,45 +13,101 @@ const els = {
   processList: document.getElementById('processList'),
   relayStats: document.getElementById('relayStats'),
   cpaList: document.getElementById('cpaList'),
+  usageChartTitle: document.getElementById('usageChartTitle'),
+  trafficChartTitle: document.getElementById('trafficChartTitle'),
+  timeRangeSwitch: document.getElementById('timeRangeSwitch'),
 };
 
 const fmtPct = n => `${Number(n || 0).toFixed(1)}%`;
 const fmtNum = n => new Intl.NumberFormat('zh-CN').format(Number(n || 0));
 const fmtMb = n => `${Number(n || 0).toFixed(1)} MB`;
+const rangeLabel = key => ({'3h':'3小时','24h':'24小时','7d':'7天','30d':'30天','all':'所有时间'}[key] || '24小时');
 
-function renderUsageChart(history) {
-  const labels = history.map(x => x.ts.slice(11, 16));
-  const config = {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {label: 'CPU', data: history.map(x => x.cpu_percent), borderColor: '#60a5fa', tension: .25},
-        {label: '内存', data: history.map(x => x.mem_percent), borderColor: '#34d399', tension: .25},
-        {label: '磁盘', data: history.map(x => x.disk_percent), borderColor: '#f59e0b', tension: .25},
-      ]
-    },
-    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200}
-  };
-  if (usageChart) usageChart.destroy();
-  usageChart = new Chart(document.getElementById('usageChart'), config);
+function downsample(history, maxPoints = 120) {
+  if (!Array.isArray(history) || history.length <= maxPoints) return history || [];
+  const step = Math.ceil(history.length / maxPoints);
+  const result = [];
+  for (let i = 0; i < history.length; i += step) result.push(history[i]);
+  if (result[result.length - 1] !== history[history.length - 1]) result.push(history[history.length - 1]);
+  return result;
 }
 
-function renderTrafficChart(history) {
-  const labels = history.map(x => x.ts.slice(11, 16));
+function chartLabels(history) {
+  if (currentRange === 'all' || currentRange === '30d' || currentRange === '7d') {
+    return history.map(x => (x.ts || '').slice(5, 16).replace('T', ' '));
+  }
+  return history.map(x => (x.ts || '').slice(11, 16));
+}
+
+function destroyCharts() {
+  if (usageChart) { usageChart.destroy(); usageChart = null; }
+  if (trafficChart) { trafficChart.destroy(); trafficChart = null; }
+}
+
+function renderUsageChart(historyRaw) {
+  const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
+  const canvas = document.getElementById('usageChart');
+  if (!canvas) return;
+  if (!history.length) {
+    destroyCharts();
+    return;
+  }
+  const labels = chartLabels(history);
   const config = {
     type: 'line',
     data: {
       labels,
       datasets: [
-        {label: '下载累计 MB', data: history.map(x => x.net_rx_mb), borderColor: '#22c55e', tension: .25},
-        {label: '上传累计 MB', data: history.map(x => x.net_tx_mb), borderColor: '#f472b6', tension: .25},
+        {label: 'CPU', data: history.map(x => x.cpu_percent), borderColor: '#60a5fa', tension: .25, pointRadius: 0},
+        {label: '内存', data: history.map(x => x.mem_percent), borderColor: '#34d399', tension: .25, pointRadius: 0},
+        {label: '磁盘', data: history.map(x => x.disk_percent), borderColor: '#f59e0b', tension: .25, pointRadius: 0},
       ]
     },
-    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200}
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      resizeDelay: 200,
+      parsing: false,
+      normalized: true,
+      plugins: { legend: { display: true } },
+      scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: true, max: 100 } }
+    }
+  };
+  if (usageChart) usageChart.destroy();
+  usageChart = new Chart(canvas, config);
+}
+
+function renderTrafficChart(historyRaw) {
+  const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
+  const canvas = document.getElementById('trafficChart');
+  if (!canvas) return;
+  if (!history.length) {
+    if (trafficChart) { trafficChart.destroy(); trafficChart = null; }
+    return;
+  }
+  const labels = chartLabels(history);
+  const config = {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {label: '下载累计 MB', data: history.map(x => x.net_rx_mb), borderColor: '#22c55e', tension: .25, pointRadius: 0},
+        {label: '上传累计 MB', data: history.map(x => x.net_tx_mb), borderColor: '#f472b6', tension: .25, pointRadius: 0},
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      resizeDelay: 200,
+      parsing: false,
+      normalized: true,
+      scales: { x: { ticks: { maxTicksLimit: 8 } } }
+    }
   };
   if (trafficChart) trafficChart.destroy();
-  trafficChart = new Chart(document.getElementById('trafficChart'), config);
+  trafficChart = new Chart(canvas, config);
 }
 
 function renderProcesses(items) {
@@ -129,8 +186,15 @@ function renderCpas(cpas) {
   `).join('');
 }
 
-async function loadAll() {
-  const res = await fetch('/api/overview');
+function setActiveRangeBtn() {
+  document.querySelectorAll('.range-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.range === currentRange);
+  });
+}
+
+async function loadAll(forceBust = false) {
+  const url = `/api/overview?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`;
+  const res = await fetch(url, { cache: 'no-store' });
   const data = await res.json();
   const server = data.server;
   els.healthScore.textContent = server.health;
@@ -138,6 +202,9 @@ async function loadAll() {
   els.memNow.textContent = fmtPct(server.latest.mem_percent);
   els.diskNow.textContent = fmtPct(server.latest.disk_percent);
   els.trafficNow.textContent = `${fmtMb(server.traffic_24h.rx_mb)} / ${fmtMb(server.traffic_24h.tx_mb)}`;
+  els.usageChartTitle.textContent = `CPU / 内存 / 磁盘（${rangeLabel(currentRange)}）`;
+  els.trafficChartTitle.textContent = `网络累计流量（${rangeLabel(currentRange)}）`;
+  setActiveRangeBtn();
   renderUsageChart(server.history || []);
   renderTrafficChart(server.history || []);
   renderProcesses(server.top_processes || []);
@@ -148,18 +215,25 @@ async function loadAll() {
 async function deleteCpa(id) {
   if (!confirm('确认删除这个 CPA 吗？')) return;
   await fetch(`/api/cpas/${id}`, {method:'DELETE'});
-  await loadAll();
+  await loadAll(true);
 }
 window.deleteCpa = deleteCpa;
 
-els.refreshAllBtn.addEventListener('click', loadAll);
+els.refreshAllBtn.addEventListener('click', () => loadAll(true));
 els.scanCpasBtn.addEventListener('click', async () => {
   els.scanCpasBtn.disabled = true;
   els.scanCpasBtn.textContent = '扫描中...';
   await fetch('/api/cpas/scan', {method:'POST'});
-  await loadAll();
+  await loadAll(true);
   els.scanCpasBtn.disabled = false;
   els.scanCpasBtn.textContent = '刷新并扫描全部 CPA';
+});
+
+document.querySelectorAll('.range-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    currentRange = btn.dataset.range || '24h';
+    await loadAll(true);
+  });
 });
 
 els.cpaForm.addEventListener('submit', async (e) => {
@@ -175,8 +249,9 @@ els.cpaForm.addEventListener('submit', async (e) => {
     return;
   }
   els.cpaForm.reset();
-  await loadAll();
+  await loadAll(true);
 });
 
-loadAll();
-setInterval(loadAll, 60000);
+// 进入页面先强制刷新一次最新数据
+loadAll(true);
+setInterval(() => loadAll(true), 60000);

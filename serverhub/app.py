@@ -446,7 +446,7 @@ def index():
 @app.get('/api/overview')
 def api_overview():
     range_key = request.args.get('range', '24h')
-    hours_map = {'3h': 3, '24h': 24, 'all': None}
+    hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
     history_hours = hours_map.get(range_key, 24)
     return jsonify({
         'server': get_metric_summary(history_hours),
