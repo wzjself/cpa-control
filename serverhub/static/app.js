@@ -5,6 +5,7 @@ let credentialSearch = '';
 let credentialUploadFilter = 'all';
 let latestCredentials = [];
 let latestCpas = [];
+let credentialStoreExpanded = false;
 const recentlyHighlightedCredentialIds = new Set();
 
 const els = {
@@ -33,6 +34,7 @@ const els = {
   uploadCredentialFilesBtn: document.getElementById('uploadCredentialFilesBtn'),
   credentialStoreCount: document.getElementById('credentialStoreCount'),
   credentialStoreHint: document.getElementById('credentialStoreHint'),
+  toggleCredentialFoldBtn: document.getElementById('toggleCredentialFoldBtn'),
 };
 
 const fmtPct = n => `${Number(n ?? 0).toFixed(1)}%`;
@@ -114,6 +116,9 @@ function renderCredentialStore(credentials = [], cpas = []) {
   const filtered = latestCredentials.filter(item => matchesCredentialSearch(item, credentialSearch) && matchesUploadFilter(item));
   if (els.credentialStoreCount) els.credentialStoreCount.textContent = `仓库已有 ${latestCredentials.length} 个凭证`;
   if (els.credentialStoreHint) els.credentialStoreHint.textContent = filtered.length === latestCredentials.length ? `当前显示 ${filtered.length} 个` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个`;
+  if (els.toggleCredentialFoldBtn) els.toggleCredentialFoldBtn.textContent = credentialStoreExpanded ? '折叠' : '展开';
+  els.credentialStoreList?.classList.toggle('credential-store-folded', !credentialStoreExpanded);
+  els.credentialStoreList?.classList.toggle('credential-store-expanded', credentialStoreExpanded);
   els.credentialStoreList.innerHTML = filtered.map(item => `
     <label class="credential-item ${recentlyHighlightedCredentialIds.has(item.id) ? 'recent-upload-highlight' : ''}" data-cred-id="${item.id}">
       <input type="checkbox" ${selectedCredentialIds.has(item.id) ? 'checked' : ''} onchange="toggleCredentialSelect('${item.id}', this.checked)">
@@ -162,6 +167,7 @@ els.credentialSearchInput?.addEventListener('input', e => { credentialSearch = e
 els.credentialUploadFilter?.addEventListener('change', e => { credentialUploadFilter = e.target.value || 'all'; renderCredentialStore(latestCredentials, latestCpas); });
 els.uploadCredentialFilesBtn?.addEventListener('click', () => els.credentialFilesInput?.click());
 els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(e.target.files, els.uploadCredentialFilesBtn));
+els.toggleCredentialFoldBtn?.addEventListener('click', () => { credentialStoreExpanded = !credentialStoreExpanded; renderCredentialStore(latestCredentials, latestCpas); });
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
 setInterval(() => loadServerStatus(true), 2000);

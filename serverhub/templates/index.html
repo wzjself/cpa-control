@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>服务器总览</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330za">
-  <script src="/static/vendor/chart.umd.js?v=20260330za"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260330zbb">
+  <script src="/static/vendor/chart.umd.js?v=20260330zbb"></script>
 </head>
 <body>
   <div class="container">
@@ -73,10 +73,13 @@
 
       <div class="credential-store-head">
         <strong id="credentialStoreCount">仓库已有 0 个凭证</strong>
-        <span class="muted" id="credentialStoreHint">支持多选后批量投放</span>
+        <div class="credential-store-tools">
+          <span class="muted" id="credentialStoreHint">支持多选后批量投放</span>
+          <button id="toggleCredentialFoldBtn" type="button" class="ghost small-btn">展开</button>
+        </div>
       </div>
 
-      <div id="credentialStoreList" class="credential-store-list"></div>
+      <div id="credentialStoreList" class="credential-store-list credential-store-folded"></div>
     </section>
 
     <section class="card">
@@ -100,6 +103,6 @@
     </section>
 
   </div>
-  <script src="/static/app.js?v=20260330za"></script>
+  <script src="/static/app.js?v=20260330zbb"></script>
 </body>
 </html>
