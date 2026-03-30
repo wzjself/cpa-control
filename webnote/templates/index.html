@@ -64,6 +64,17 @@
     </button>
   </template>
 
+  <div id="confirmModal" class="confirm-modal hidden">
+    <div class="confirm-card">
+      <h3 id="confirmTitle">确认操作</h3>
+      <p id="confirmMessage">你确定要继续吗？</p>
+      <div class="confirm-actions">
+        <button id="confirmCancelBtn" class="ghost">取消</button>
+        <button id="confirmOkBtn" class="danger-solid">确认删除</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

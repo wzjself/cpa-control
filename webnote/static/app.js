@@ -5,6 +5,7 @@ const state = {
   saveTimer: null,
   dragId: null,
   fileSearch: '',
+  confirmResolver: null,
 };
 
 const els = {
@@ -20,6 +21,11 @@ const els = {
   mobileToggle: document.getElementById('mobileToggle'),
   sidebar: document.getElementById('sidebar'),
   template: document.getElementById('tabItemTemplate'),
+  confirmModal: document.getElementById('confirmModal'),
+  confirmTitle: document.getElementById('confirmTitle'),
+  confirmMessage: document.getElementById('confirmMessage'),
+  confirmCancelBtn: document.getElementById('confirmCancelBtn'),
+  confirmOkBtn: document.getElementById('confirmOkBtn'),
 };
 
 function formatBytes(bytes) {
@@ -36,13 +42,31 @@ function setStatus(text) {
   els.saveStatus.textContent = text;
 }
 
+function showConfirm(title, message, okText = '确认删除') {
+  return new Promise((resolve) => {
+    state.confirmResolver = resolve;
+    els.confirmTitle.textContent = title;
+    els.confirmMessage.textContent = message;
+    els.confirmOkBtn.textContent = okText;
+    els.confirmModal.classList.remove('hidden');
+  });
+}
+
+function closeConfirm(result) {
+  els.confirmModal.classList.add('hidden');
+  if (state.confirmResolver) {
+    state.confirmResolver(result);
+    state.confirmResolver = null;
+  }
+}
+
 function renderTabs() {
   els.tabList.innerHTML = '';
   for (const tab of state.tabs) {
     const node = els.template.content.firstElementChild.cloneNode(true);
     node.dataset.id = tab.id;
     node.classList.toggle('active', tab.id === state.activeTabId);
-    node.querySelector('.tab-title').textContent = tab.title || 'Untitled';
+    node.querySelector('.tab-title').textContent = tab.title || '未命名';
     node.addEventListener('click', () => {
       state.activeTabId = tab.id;
       renderAll();
@@ -130,7 +154,7 @@ async function saveActiveTab() {
   if (!tab) return;
   setStatus('保存中...');
   const payload = {
-    title: els.titleInput.value.trim() || 'Untitled',
+    title: els.titleInput.value.trim() || '未命名',
     content_html: els.editor.innerHTML,
   };
   const res = await fetch(`/api/tabs/${tab.id}`, {
@@ -167,7 +191,8 @@ async function createTab() {
 async function deleteTab() {
   const tab = activeTab();
   if (!tab) return;
-  if (!confirm(`确认删除标签“${tab.title}”？`)) return;
+  const confirmed = await showConfirm('删除标签', `确认删除标签“${tab.title}”？`, '确认删除');
+  if (!confirmed) return;
   const res = await fetch(`/api/tabs/${tab.id}`, { method: 'DELETE' });
   const data = await res.json();
   if (!res.ok) {
@@ -201,7 +226,8 @@ async function uploadImage(file) {
 }
 
 async function deleteUpload(item) {
-  if (!confirm(`确认删除文件“${item.original_name}”？`)) return;
+  const confirmed = await showConfirm('删除文件', `确认删除文件“${item.original_name}”？`, '确认删除');
+  if (!confirmed) return;
   const res = await fetch(`/api/uploads/${item.id}`, { method: 'DELETE' });
   const data = await res.json();
   if (!res.ok) {
@@ -231,6 +257,11 @@ if (els.fileSearchInput) {
   });
 }
 els.mobileToggle.addEventListener('click', () => els.sidebar.classList.toggle('open'));
+els.confirmCancelBtn.addEventListener('click', () => closeConfirm(false));
+els.confirmOkBtn.addEventListener('click', () => closeConfirm(true));
+els.confirmModal.addEventListener('click', (e) => {
+  if (e.target === els.confirmModal) closeConfirm(false);
+});
 
 els.editor.addEventListener('paste', async (event) => {
   const items = [...(event.clipboardData?.items || [])];

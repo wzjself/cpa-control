@@ -33,6 +33,10 @@ button.ghost {
   border: 1px solid var(--line);
 }
 button.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.35); }
+button.danger-solid {
+  background: #dc2626;
+  color: #fff;
+}
 .app-shell {
   display: grid;
   grid-template-columns: 320px 1fr;
@@ -209,6 +213,34 @@ button.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.35); }
   color: #fecaca;
   padding: 8px 12px;
   border-radius: 12px;
+}
+
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+.confirm-modal.hidden { display: none; }
+.confirm-card {
+  width: min(92vw, 420px);
+  background: #0f172a;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+.confirm-card h3 { margin: 0 0 10px; }
+.confirm-card p { margin: 0; color: var(--muted); }
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 @media (max-width: 900px) {
