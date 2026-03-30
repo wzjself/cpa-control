@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>服务器总览</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330q">
-  <script src="/static/vendor/chart.umd.js?v=20260330q"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260330r">
+  <script src="/static/vendor/chart.umd.js?v=20260330r"></script>
 </head>
 <body>
   <div class="container">
@@ -80,24 +80,19 @@
       <div class="section-head">
         <div>
           <h3>凭证仓库</h3>
-          <p>先存你的凭证，再批量投放到指定 CPA</p>
+          <p>直接上传 JSON 文件入仓库，再批量投放到指定 CPA</p>
         </div>
         <div class="cpa-actions">
           <select id="credentialTargetSelect"></select>
+          <label class="upload-file-btn" for="credentialFilesInput">批量上传 JSON 文件</label>
+          <input id="credentialFilesInput" type="file" accept=".json,.txt" multiple hidden>
           <button id="deploySelectedBtn">批量上传到目标 CPA</button>
         </div>
       </div>
 
-      <div class="credential-import">
-        <textarea id="credentialBulkInput" placeholder='支持批量粘贴 JSON 凭证；多个凭证之间可用空行分隔'></textarea>
-        <div class="cpa-actions">
-          <input id="credentialNamePrefix" placeholder="可选：名称前缀">
-          <input id="credentialSearchInput" placeholder="搜索仓库凭证 / 目标 CPA">
-          <label class="upload-file-btn" for="credentialFilesInput">批量上传凭证文件</label>
-          <input id="credentialFilesInput" type="file" accept=".json,.txt" multiple hidden>
-          <button id="importCredentialsBtn">导入到仓库</button>
-          <button id="selectAllCredentialsBtn" type="button">全选/反选</button>
-        </div>
+      <div class="credential-toolbar">
+        <input id="credentialSearchInput" placeholder="搜索仓库凭证 / 目标 CPA">
+        <button id="selectAllCredentialsBtn" type="button">全选/反选</button>
       </div>
 
       <div class="credential-store-head">
@@ -105,10 +100,10 @@
         <span class="muted" id="credentialStoreHint">支持多选后批量投放</span>
       </div>
 
-      <div id="credentialStoreList" class="credential-store-grid"></div>
+      <div id="credentialStoreList" class="credential-store-list"></div>
     </section>
 
   </div>
-  <script src="/static/app.js?v=20260330q"></script>
+  <script src="/static/app.js?v=20260330r"></script>
 </body>
 </html>

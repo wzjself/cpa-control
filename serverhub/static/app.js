@@ -4,7 +4,6 @@ const selectedCredentialIds = new Set();
 let credentialSearch = '';
 let latestCredentials = [];
 let latestCpas = [];
-let pendingFileItems = [];
 
 const els = {
   healthScore: document.getElementById('healthScore'),
@@ -22,9 +21,6 @@ const els = {
   trafficChartTitle: document.getElementById('trafficChartTitle'),
   timeRangeSwitch: document.getElementById('timeRangeSwitch'),
   credentialStoreList: document.getElementById('credentialStoreList'),
-  credentialBulkInput: document.getElementById('credentialBulkInput'),
-  credentialNamePrefix: document.getElementById('credentialNamePrefix'),
-  importCredentialsBtn: document.getElementById('importCredentialsBtn'),
   selectAllCredentialsBtn: document.getElementById('selectAllCredentialsBtn'),
   deploySelectedBtn: document.getElementById('deploySelectedBtn'),
   credentialTargetSelect: document.getElementById('credentialTargetSelect'),
@@ -46,7 +42,6 @@ const fmtTime = s => {
   if (Number.isNaN(d.getTime())) return String(s);
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
 };
-function toast(msg) { alert(msg); }
 function setButtonLoading(button, loading, loadingText = '处理中...') {
   if (!button) return;
   if (loading) {
@@ -63,11 +58,8 @@ function setButtonLoading(button, loading, loadingText = '处理中...') {
 function withButtonLoading(button, loadingText, fn) {
   return async (...args) => {
     setButtonLoading(button, true, loadingText);
-    try {
-      return await fn(...args);
-    } finally {
-      setButtonLoading(button, false);
-    }
+    try { return await fn(...args); }
+    finally { setButtonLoading(button, false); }
   };
 }
 function matchesCredentialSearch(item, keyword) {
@@ -101,7 +93,30 @@ function seriesRatePerSecond(history, key) { if (!Array.isArray(history) || hist
 function renderTrafficChart(historyRaw) { const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160), canvas = document.getElementById('trafficChart'); if (!canvas || history.length < 2) { renderChartFallback(canvas, '暂无历史速率数据'); return; } clearChartFallback(canvas); destroyCanvasChart(canvas); const rx = seriesRatePerSecond(history, 'net_rx_mb'), tx = seriesRatePerSecond(history, 'net_tx_mb'), labels = chartLabels(history).slice(1), allVals = rx.concat(tx); drawSimpleLineChart(canvas, [{ label: '下载速率', data: rx, color: '#22c55e' }, { label: '上传速率', data: tx, color: '#f472b6' }], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240 }); renderChartFallback(canvas, '单位：网络速率（KB/s）'); }
 function renderProcesses(processes) { els.processList.innerHTML = (processes || []).map(p => `<div class="process-item"><strong>${esc(p.name)}</strong><div class="muted">CPU ${fmtPct(p.cpu_percent)} · 内存 ${fmtNum(p.memory_mb)} MB · PID ${p.pid}</div></div>`).join('') || '<div class="muted">暂无数据</div>'; }
 function renderRelayStats(data) { if (!data || !data.available) { els.relayStats.innerHTML = '<div class="muted">clirelay 暂无可用数据</div>'; return; } const items = [['今日请求', fmtNum(data.requests_today)], ['今日 Token', fmtNum(data.tokens_today)], ['RPM 峰值', fmtNum(data.rpm_peak)], ['TPM 峰值', fmtNum(data.tpm_peak)], ['近 24h Key 数', fmtNum(data.keys_24h)], ['近 24h 模型数', fmtNum(data.models_24h)]]; els.relayStats.innerHTML = items.map(([k,v]) => `<div class="relay-item"><strong>${k}</strong><div class="muted">${v}</div></div>`).join(''); }
-function renderCredentialStore(credentials = [], cpas = []) { latestCredentials = credentials || []; latestCpas = cpas || []; if (els.credentialTargetSelect) { const prev = els.credentialTargetSelect.value; els.credentialTargetSelect.innerHTML = '<option value="">选择目标 CPA</option>' + latestCpas.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join(''); if ([...els.credentialTargetSelect.options].some(o => o.value === prev)) els.credentialTargetSelect.value = prev; } const filtered = latestCredentials.filter(item => matchesCredentialSearch(item, credentialSearch)); if (els.credentialStoreCount) els.credentialStoreCount.textContent = `仓库已有 ${latestCredentials.length} 个凭证`; if (els.credentialStoreHint) els.credentialStoreHint.textContent = filtered.length === latestCredentials.length ? `当前显示 ${filtered.length} 个` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个`; els.credentialStoreList.innerHTML = filtered.map(item => `<label class="credential-item" data-cred-id="${item.id}"><div class="credential-item-top"><input type="checkbox" ${selectedCredentialIds.has(item.id) ? 'checked' : ''} onchange="toggleCredentialSelect('${item.id}', this.checked)"><strong title="${esc(item.filename)}">${esc(item.name)}</strong></div><div class="muted">${esc(item.filename)}</div><div class="muted">上传 ${fmtTime(item.uploaded_at)}</div><div class="muted">最近投放：${item.last_target_name ? `${esc(item.last_target_name)} · ${fmtTime(item.last_used_at)}` : '暂无'}</div><div class="credential-actions"><button type="button" class="danger small-btn" onclick="deleteCredential('${item.id}')">删除</button></div></label>`).join('') || '<div class="muted">没有匹配的凭证。</div>'; }
+function renderCredentialStore(credentials = [], cpas = []) {
+  latestCredentials = credentials || []; latestCpas = cpas || [];
+  if (els.credentialTargetSelect) {
+    const prev = els.credentialTargetSelect.value;
+    els.credentialTargetSelect.innerHTML = '<option value="">选择目标 CPA</option>' + latestCpas.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    if ([...els.credentialTargetSelect.options].some(o => o.value === prev)) els.credentialTargetSelect.value = prev;
+  }
+  const filtered = latestCredentials.filter(item => matchesCredentialSearch(item, credentialSearch));
+  if (els.credentialStoreCount) els.credentialStoreCount.textContent = `仓库已有 ${latestCredentials.length} 个凭证`;
+  if (els.credentialStoreHint) els.credentialStoreHint.textContent = filtered.length === latestCredentials.length ? `当前显示 ${filtered.length} 个` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个`;
+  els.credentialStoreList.innerHTML = filtered.map(item => `
+    <label class="credential-item" data-cred-id="${item.id}">
+      <input type="checkbox" ${selectedCredentialIds.has(item.id) ? 'checked' : ''} onchange="toggleCredentialSelect('${item.id}', this.checked)">
+      <div class="credential-main">
+        <strong title="${esc(item.name)}">${esc(item.name)}</strong>
+        <div class="muted">${esc(item.filename)}</div>
+      </div>
+      <div class="muted">上传 ${fmtTime(item.uploaded_at)}</div>
+      <div class="muted">最近投放：${item.last_target_name ? `${esc(item.last_target_name)} · ${fmtTime(item.last_used_at)}` : '暂无'}</div>
+      <div class="muted">状态：已入仓</div>
+      <div class="credential-actions"><button type="button" class="danger small-btn" onclick="deleteCredential('${item.id}')">删除</button></div>
+    </label>
+  `).join('') || '<div class="muted">仓库里还没有凭证，请先上传 JSON 文件。</div>';
+}
 function renderCpaCard(cpa) { const knownQuotaAccounts = (cpa.accounts || []).filter(acc => acc.remaining_ratio !== null && acc.remaining_ratio !== undefined).length; const unknownQuotaAccounts = Math.max(0, (cpa.total || 0) - knownQuotaAccounts); return `<div class="cpa-card" data-cpa-id="${cpa.id}"><div class="cpa-head"><div><div><strong>${cpa.name}</strong> <span class="badge">${cpa.provider}</span></div><div class="muted">${cpa.base_url}</div></div><div class="cpa-actions"><button class="ghost small-btn js-refresh-cpa" onclick="refreshCpa('${cpa.id}', this)">刷新当前 CPA</button><button class="ghost small-btn js-delete-401" onclick="delete401('${cpa.id}', this)">一键删除401</button><button class="danger small-btn" onclick="deleteCpa('${cpa.id}')">删除 CPA</button></div></div><div class="mini-grid"><div class="mini-stat"><div class="muted">总凭证</div><div class="n">${fmtNum(cpa.total)}</div></div><div class="mini-stat"><div class="muted">401</div><div class="n err">${fmtNum(cpa.invalid_401)}</div></div><div class="mini-stat"><div class="muted">limit</div><div class="n warn">${fmtNum(cpa.quota_limited)}</div></div><div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div></div><div class="quota-row"><div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? `已知额度 ${knownQuotaAccounts} 个 · 未知 ${unknownQuotaAccounts} 个` : `剩余 ${fmtMaybePct(cpa.remaining_ratio)} / 已用 ${fmtMaybePct(cpa.used_ratio)} · 未知 ${unknownQuotaAccounts} 个`}</span></div><div class="progress remain"><span style="width:${cpa.remaining_ratio ?? 0}%"></span></div></div><div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）</div><div class="account-grid compact-account-grid">${(cpa.accounts || []).map(acc => `<div class="account-chip"><div class="account-chip-top"><strong title="${esc(acc.email || acc.name)}">${esc(acc.email || acc.name)}</strong><span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span></div><div class="progress mini-remain"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div><div class="muted">剩余 ${fmtMaybePct(acc.remaining_ratio)}</div><div class="muted">${acc.quota_checked_at ? `更新 ${fmtTime(acc.quota_checked_at)}` : '未取到时间'}</div><div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除</button></div></div>`).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>'}</div></div>`; }
 function replaceCpaCard(cpa) { const old = els.cpaList.querySelector(`[data-cpa-id="${cpa.id}"]`), html = renderCpaCard(cpa); if (old) old.outerHTML = html; else els.cpaList.insertAdjacentHTML('afterbegin', html); }
 function renderCpas(cpas) { els.cpaList.innerHTML = cpas.map(renderCpaCard).join(''); }
@@ -109,29 +124,50 @@ function renderServer(server) { els.healthScore.textContent = server.health; els
 async function loadServerStatus(forceBust = false) { const url = `/api/server-status?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`; const res = await fetch(url, { cache: 'no-store' }); const data = await res.json(); renderServer(data.server); }
 async function loadCredentials() { const res = await fetch('/api/credentials', { cache: 'no-store' }); const data = await res.json(); renderCredentialStore(data.credentials || [], data.cpas || []); }
 async function loadAll(forceBust = false) { const url = `/api/overview?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`; const res = await fetch(url, { cache: 'no-store' }); const data = await res.json(); renderServer(data.server); renderRelayStats(data.clirelay || {}); renderCpas(data.cpas || []); await loadCredentials(); }
-async function deleteCpa(id) { if (!confirm('确认删除这个 CPA 吗？')) return; await fetch(`/api/cpas/${id}`, {method:'DELETE'}); const card = els.cpaList.querySelector(`[data-cpa-id="${id}"]`); if (card) card.remove(); loadCredentials(); toast('已删除 CPA'); }
-async function refreshCpa(id, button) { const run = async () => { const res = await fetch(`/api/cpas/${id}/refresh`, {method:'POST'}); const data = await res.json(); if (!res.ok) { if (data.cpa) replaceCpaCard(data.cpa); toast(data.error || '刷新失败'); return; } replaceCpaCard(data.cpa); toast('当前 CPA 刷新完成'); }; return withButtonLoading(button, '刷新中...', run)(); }
-async function delete401(id, button) { if (!confirm('确认一键删除这个 CPA 里的 401 凭证吗？')) return; const run = async () => { const res = await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); if (!res.ok) { toast('删除401时有失败项'); return; } toast(`401 清理完成：${data.deleted?.length || 0} 个`); }; return withButtonLoading(button, '清理中...', run)(); }
-async function deleteAuthFile(cpaId, encodedName) { if (!confirm('确认删除这个凭证吗？')) return; const res = await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); if (!res.ok) alert((data.result && data.result.text) || '删除失败'); else toast('凭证已删除'); }
+async function deleteCpa(id) { if (!confirm('确认删除这个 CPA 吗？')) return; await fetch(`/api/cpas/${id}`, {method:'DELETE'}); const card = els.cpaList.querySelector(`[data-cpa-id="${id}"]`); if (card) card.remove(); loadCredentials(); }
+async function refreshCpa(id, button) { const run = async () => { const res = await fetch(`/api/cpas/${id}/refresh`, {method:'POST'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); }; return withButtonLoading(button, '刷新中...', run)(); }
+async function delete401(id, button) { if (!confirm('确认一键删除这个 CPA 里的 401 凭证吗？')) return; const run = async () => { const res = await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); }; return withButtonLoading(button, '清理中...', run)(); }
+async function deleteAuthFile(cpaId, encodedName) { if (!confirm('确认删除这个凭证吗？')) return; const res = await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); if (!res.ok) alert((data.result && data.result.text) || '删除失败'); }
 function toggleCredentialSelect(id, checked) { if (checked) selectedCredentialIds.add(id); else selectedCredentialIds.delete(id); }
-async function deleteCredential(id) { if (!confirm('确认从仓库删除这个凭证吗？')) return; const res = await fetch(`/api/credentials/${id}`, { method: 'DELETE' }); const data = await res.json(); selectedCredentialIds.delete(id); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); toast('仓库凭证已删除'); }
-function parseCredentialBlocks(text, prefix = '') { const parts = String(text || '').split(/\n\s*\n/).map(x => x.trim()).filter(Boolean); return parts.map((part, idx) => ({ name: `${prefix || '凭证'}-${idx + 1}`, filename: `${prefix || 'credential'}-${Date.now()}-${idx + 1}.json`, content: part })); }
-function mergeImportItems() { const textItems = parseCredentialBlocks(els.credentialBulkInput.value, els.credentialNamePrefix.value.trim()); return [...pendingFileItems, ...textItems]; }
-async function importCredentials() { const run = async () => { const items = mergeImportItems(); if (!items.length) return alert('先粘贴凭证内容或选择凭证文件'); const res = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) }); const data = await res.json(); els.credentialBulkInput.value = ''; if (els.credentialFilesInput) els.credentialFilesInput.value = ''; pendingFileItems = []; renderCredentialStore(data.credentials || [], latestCpas); toast(`已导入 ${data.saved?.length || 0} 个凭证`); }; return withButtonLoading(els.importCredentialsBtn, '导入中...', run)(); }
-async function deploySelectedCredentials() { const run = async () => { const targetId = els.credentialTargetSelect.value, ids = Array.from(selectedCredentialIds); if (!targetId) return alert('先选择目标 CPA'); if (!ids.length) return alert('先勾选仓库里的凭证'); const res = await fetch('/api/credentials/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId, credential_ids: ids }) }); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); renderCredentialStore(data.credentials || [], latestCpas); const okCount = (data.results || []).filter(x => x.ok).length, failItems = (data.results || []).filter(x => !x.ok); failItems.forEach(x => selectedCredentialIds.add(x.id)); (data.results || []).filter(x => x.ok).forEach(x => selectedCredentialIds.delete(x.id)); toast(failItems.length ? `成功 ${okCount} 个，失败 ${failItems.length} 个：${failItems.slice(0,3).map(x => x.name).join('、')}` : `已成功投放 ${okCount} 个凭证`); }; return withButtonLoading(els.deploySelectedBtn, '上传中...', run)(); }
-async function addCpa(e) { e.preventDefault(); const fd = new FormData(els.cpaForm); const payload = Object.fromEntries(fd.entries()); await fetch('/api/cpas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}); els.cpaForm.reset(); await loadAll(true); toast('CPA 已添加'); }
-async function scanCpas() { const run = async () => { await fetch('/api/cpas/scan', {method:'POST'}); await loadAll(true); toast('全部 CPA 刷新完成'); }; return withButtonLoading(els.scanCpasBtn, '扫描中...', run)(); }
-async function refreshAll() { const run = async () => { await loadAll(true); toast('页面数据刷新完成'); }; return withButtonLoading(els.refreshAllBtn, '刷新中...', run)(); }
-async function readSelectedFiles(files) { const prefix = els.credentialNamePrefix?.value.trim(); pendingFileItems = await Promise.all(Array.from(files || []).map(async file => ({ name: prefix ? `${prefix}-${file.name}` : file.name, filename: file.name, content: await file.text() }))); toast(`已选择 ${pendingFileItems.length} 个凭证文件，点“导入到仓库”即可入库`); }
+async function deleteCredential(id) { if (!confirm('确认从仓库删除这个凭证吗？')) return; const res = await fetch(`/api/credentials/${id}`, { method: 'DELETE' }); const data = await res.json(); selectedCredentialIds.delete(id); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); }
+async function importCredentialFiles(files, button) {
+  const fileList = Array.from(files || []).filter(Boolean);
+  if (!fileList.length) return;
+  const run = async () => {
+    const items = await Promise.all(fileList.map(async file => ({ name: file.name, filename: file.name, content: await file.text() })));
+    const res = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
+    const data = await res.json();
+    if (els.credentialFilesInput) els.credentialFilesInput.value = '';
+    renderCredentialStore(data.credentials || [], latestCpas);
+  };
+  return withButtonLoading(button, '上传中...', run)();
+}
+async function deploySelectedCredentials() {
+  const run = async () => {
+    const targetId = els.credentialTargetSelect.value, ids = Array.from(selectedCredentialIds);
+    if (!targetId) return alert('先选择目标 CPA');
+    if (!ids.length) return alert('先勾选仓库里的凭证');
+    const res = await fetch('/api/credentials/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId, credential_ids: ids }) });
+    const data = await res.json();
+    if (data.cpa) replaceCpaCard(data.cpa);
+    renderCredentialStore(data.credentials || [], latestCpas);
+    const failItems = (data.results || []).filter(x => !x.ok);
+    failItems.forEach(x => selectedCredentialIds.add(x.id));
+    (data.results || []).filter(x => x.ok).forEach(x => selectedCredentialIds.delete(x.id));
+  };
+  return withButtonLoading(els.deploySelectedBtn, '上传中...', run)();
+}
+async function addCpa(e) { e.preventDefault(); const fd = new FormData(els.cpaForm); const payload = Object.fromEntries(fd.entries()); await fetch('/api/cpas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}); els.cpaForm.reset(); await loadAll(true); }
+async function scanCpas() { const run = async () => { await fetch('/api/cpas/scan', {method:'POST'}); await loadAll(true); }; return withButtonLoading(els.scanCpasBtn, '扫描中...', run)(); }
+async function refreshAll() { const run = async () => { await loadAll(true); }; return withButtonLoading(els.refreshAllBtn, '刷新中...', run)(); }
 window.deleteCpa = deleteCpa; window.refreshCpa = refreshCpa; window.delete401 = delete401; window.deleteAuthFile = deleteAuthFile; window.toggleCredentialSelect = toggleCredentialSelect; window.deleteCredential = deleteCredential;
 els.cpaForm?.addEventListener('submit', addCpa);
 els.refreshAllBtn?.addEventListener('click', refreshAll);
 els.scanCpasBtn?.addEventListener('click', scanCpas);
-els.importCredentialsBtn?.addEventListener('click', importCredentials);
 els.selectAllCredentialsBtn?.addEventListener('click', () => { const boxes = Array.from(document.querySelectorAll('#credentialStoreList input[type="checkbox"]')); const allChecked = boxes.length > 0 && boxes.every(el => el.checked); boxes.forEach(el => { const next = !allChecked; el.checked = next; const id = el.closest('.credential-item')?.dataset.credId; if (id) toggleCredentialSelect(id, next); }); });
 els.deploySelectedBtn?.addEventListener('click', deploySelectedCredentials);
 els.credentialSearchInput?.addEventListener('input', e => { credentialSearch = e.target.value || ''; renderCredentialStore(latestCredentials, latestCpas); });
-els.credentialFilesInput?.addEventListener('change', e => readSelectedFiles(e.target.files));
+els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(e.target.files, document.querySelector('label[for="credentialFilesInput"]')));
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
 setInterval(() => loadServerStatus(true), 2000);
