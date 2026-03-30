@@ -81,17 +81,25 @@ function renderProcesses(items) {
 
 function renderRelayStats(data) {
   if (!data.available) {
-    els.relayStats.innerHTML = '<div class="relay-item">未找到 clirelay 数据库</div>';
+    els.relayStats.innerHTML = '<div class="relay-item">未找到 clirelay 数据源</div>';
     return;
   }
+  const source = data.source === 'management-api' ? '管理接口' : 'usage.db';
+  const system = data.system || {};
+  const counts = data.counts || {};
+  const topKeys = data.top_api_keys || [];
   els.relayStats.innerHTML = `
+    <div class="relay-item">数据来源：<strong>${source}</strong></div>
     <div class="relay-item">总请求：<strong>${fmtNum(data.request_count)}</strong></div>
     <div class="relay-item">成功率：<strong>${data.success_rate}%</strong></div>
     <div class="relay-item">当前 RPM / TPM：<strong>${fmtNum(data.rpm)} / ${fmtNum(data.tpm)}</strong></div>
     <div class="relay-item">已使用 Token：<strong>${fmtNum(data.total_tokens)}</strong></div>
     <div class="relay-item">输入 / 输出 / 缓存：<strong>${fmtNum(data.input_tokens)} / ${fmtNum(data.output_tokens)} / ${fmtNum(data.cached_tokens)}</strong></div>
-  ` + data.top_api_keys.map(x => `
-    <div class="relay-item"><strong>${x.api_key_name}</strong><div class="muted">请求 ${fmtNum(x.requests)} · Token ${fmtNum(x.total_tokens)} · 成功 ${fmtNum(x.success_count)}</div></div>
+    <div class="relay-item">认证文件 / 提供商：<strong>${fmtNum(counts.auth_files || 0)} / ${fmtNum(counts.providers_total || 0)}</strong></div>
+    <div class="relay-item">clirelay 进程 CPU / 内存：<strong>${Number(system.process_cpu_pct || 0).toFixed(1)}% / ${Number(system.process_mem_pct || 0).toFixed(1)}%</strong></div>
+    <div class="relay-item">clirelay 总入站 / 出站：<strong>${fmtMb((system.net_bytes_recv || 0)/1024/1024)} / ${fmtMb((system.net_bytes_sent || 0)/1024/1024)}</strong></div>
+  ` + topKeys.map(x => `
+    <div class="relay-item"><strong>${x.name || x.api_key_name || '未命名'}</strong><div class="muted">请求 ${fmtNum(x.requests)} · Token ${fmtNum(x.tokens || x.total_tokens)}${x.success_count !== undefined ? ` · 成功 ${fmtNum(x.success_count)}` : ''}</div></div>
   `).join('');
   renderRelayChart(data.recent || []);
 }

@@ -21,6 +21,8 @@ DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "serverhub.db"
 CPA_WARDEN_DIR = Path("/root/cpa-warden")
 CLIRELAY_DB = Path("/opt/clirelay/data/usage.db")
+CLIRELAY_BASE = os.environ.get("CLIRELAY_BASE", "http://127.0.0.1:8317")
+CLIRELAY_MGMT_KEY = os.environ.get("CLIRELAY_MGMT_KEY", "wzjself")
 SAMPLE_INTERVAL = 60
 RETENTION_DAYS = 30
 PORT = int(os.environ.get("SERVERHUB_PORT", "8321"))
@@ -231,6 +233,43 @@ def get_metric_summary() -> dict[str, Any]:
 
 
 def get_clirelay_summary() -> dict[str, Any]:
+    try:
+        import requests  # type: ignore
+        headers = {'x-management-key': CLIRELAY_MGMT_KEY}
+        dash = requests.get(f'{CLIRELAY_BASE}/v0/management/dashboard-summary?days=7', headers=headers, timeout=20)
+        chart = requests.get(f'{CLIRELAY_BASE}/v0/management/usage/chart-data?days=7', headers=headers, timeout=20)
+        system = requests.get(f'{CLIRELAY_BASE}/v0/management/system-stats', headers=headers, timeout=20)
+        auth_files = requests.get(f'{CLIRELAY_BASE}/v0/management/auth-files', headers=headers, timeout=20)
+        if dash.ok and chart.ok and system.ok:
+            dash_j = dash.json()
+            chart_j = chart.json()
+            sys_j = system.json()
+            auth_j = auth_files.json() if auth_files.ok else {'files': []}
+            kpi = dash_j.get('kpi', {})
+            return {
+                'available': True,
+                'source': 'management-api',
+                'request_count': kpi.get('total_requests', 0),
+                'success_rate': round(kpi.get('success_rate', 0), 2),
+                'input_tokens': kpi.get('input_tokens', 0),
+                'output_tokens': kpi.get('output_tokens', 0),
+                'cached_tokens': kpi.get('cached_tokens', 0),
+                'total_tokens': kpi.get('total_tokens', 0),
+                'rpm': sys_j.get('total_rpm', 0),
+                'tpm': sys_j.get('total_tpm', 0),
+                'top_api_keys': chart_j.get('apikey_distribution', []),
+                'recent': [
+                    {'minute': x.get('date', ''), 'requests': x.get('requests', 0), 'tokens': (x.get('input_tokens', 0) + x.get('output_tokens', 0))}
+                    for x in chart_j.get('daily_series', [])
+                ],
+                'system': sys_j,
+                'counts': dash_j.get('counts', {}),
+                'auth_files': auth_j.get('files', []),
+                'models': chart_j.get('model_distribution', []),
+            }
+    except Exception:
+        pass
+
     if not CLIRELAY_DB.exists():
         return {'available': False}
     conn = sqlite3.connect(CLIRELAY_DB)
@@ -278,6 +317,7 @@ def get_clirelay_summary() -> dict[str, Any]:
     success_count = total.get('success_count') or 0
     return {
         'available': True,
+        'source': 'usage-db',
         'request_count': request_count,
         'success_rate': round((success_count / request_count * 100.0), 2) if request_count else 0,
         'input_tokens': total.get('input_tokens') or 0,
