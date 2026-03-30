@@ -715,25 +715,42 @@ def load_cpa_warden_accounts(target: dict[str, Any]) -> dict[str, dict[str, Any]
 def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str, dict[str, Any]], include_warden_only: bool = True) -> list[dict[str, Any]]:
     merged = []
     seen = set()
+
+    def account_keys(item: dict[str, Any]) -> list[str]:
+        keys = []
+        name = normalize_credential_name(str(item.get('name') or ''))
+        email = str(item.get('email') or '').strip().lower()
+        if name:
+            keys.append(f'name:{name}')
+        if email:
+            keys.append(f'email:{email}')
+        return keys
+
+    normalized_warden_map: dict[str, dict[str, Any]] = {}
+    for w in warden_map.values():
+        for k in account_keys(w):
+            normalized_warden_map[k] = w
+
     for acc in auth_accounts:
-        key = str((acc.get('name') or '')).lower()
-        w = warden_map.get(key, {})
-        invalid_401 = bool(w.get('invalid_401')) or bool(acc.get('invalid_401'))
-        quota_limited = bool(acc.get('quota_limited')) or (bool(w.get('quota_limited')) and not invalid_401)
+        acc_keys = account_keys(acc)
+        w = next((normalized_warden_map.get(k) for k in acc_keys if normalized_warden_map.get(k)), {})
+
+        # 实时接口优先；warden 只补充缺失字段，不覆盖实时状态
+        invalid_401 = bool(acc.get('invalid_401'))
+        quota_limited = bool(acc.get('quota_limited')) and not invalid_401
         plan_type = str(acc.get('plan_type') or w.get('plan_type') or 'unknown').lower()
         remaining_ratio = acc.get('remaining_ratio')
-        if w.get('remaining_ratio') is not None:
+        if remaining_ratio is None and w.get('remaining_ratio') is not None:
             remaining_ratio = w.get('remaining_ratio')
-        if quota_limited:
-            remaining_ratio = 0.0
-        elif invalid_401:
+        if quota_limited or invalid_401:
             remaining_ratio = 0.0
         status = '401' if invalid_401 else 'limit' if quota_limited else (acc.get('status') or w.get('status') or (plan_type if plan_type != 'unknown' else 'unknown'))
         status_message = acc.get('status_message') or w.get('status_message') or ''
+
         merged.append({
             'name': acc.get('name') or w.get('name'),
             'email': acc.get('email') or w.get('email'),
-            'disabled': bool(acc.get('disabled')) or bool(w.get('disabled')),
+            'disabled': bool(acc.get('disabled')),
             'invalid_401': invalid_401,
             'quota_limited': quota_limited,
             'remaining_ratio': round(float(remaining_ratio), 2) if remaining_ratio is not None else None,
@@ -742,12 +759,14 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'plan_type': plan_type,
             'source': 'merged',
         })
-        seen.add(key)
+        seen.update(acc_keys)
+
     if not include_warden_only:
         return merged
 
-    for key, w in warden_map.items():
-        if key in seen:
+    for w in warden_map.values():
+        w_keys = account_keys(w)
+        if any(k in seen for k in w_keys):
             continue
         invalid_401 = bool(w.get('invalid_401'))
         quota_limited = bool(w.get('quota_limited')) and not invalid_401
