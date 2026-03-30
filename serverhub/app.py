@@ -422,7 +422,7 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
     plan_type = str(((item.get('id_token') or {}).get('plan_type')) or item.get('plan_type') or 'unknown').lower()
     error_type = extract_status_message_error_type(msg)
     api_status_code = item.get('api_status_code')
-    invalid_401 = str(api_status_code or '') == '401' or bool(item.get('unavailable')) or error_type in {'401', 'unauthorized', 'invalid_api_key', 'token_expired'}
+    invalid_401 = str(api_status_code or '') == '401' or error_type in {'401', 'unauthorized', 'invalid_api_key', 'token_expired'}
     quota_limited = (not invalid_401) and (bool(item.get('usage_limit_reached')) or error_type in {'usage_limit_reached', 'rate_limit', 'quota'})
     remaining_ratio = None
     ratio_value = item.get('quota_remaining_ratio') if item.get('quota_remaining_ratio') is not None else item.get('usage_remaining_ratio')
@@ -550,7 +550,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'disabled': bool(acc.get('disabled')) or bool(w.get('disabled')),
             'invalid_401': invalid_401,
             'quota_limited': quota_limited,
-            'remaining_ratio': round(float(remaining_ratio or 0), 2),
+            'remaining_ratio': round(float(remaining_ratio), 2) if remaining_ratio is not None else None,
             'status': status,
             'status_message': status_message,
             'plan_type': plan_type,
@@ -572,7 +572,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'disabled': bool(w.get('disabled')),
             'invalid_401': invalid_401,
             'quota_limited': quota_limited,
-            'remaining_ratio': round(float(remaining_ratio or 0), 2),
+            'remaining_ratio': round(float(remaining_ratio), 2) if remaining_ratio is not None else None,
             'status': '401' if invalid_401 else 'limit' if quota_limited else plan_type if plan_type != 'unknown' else (w.get('status') or 'unknown'),
             'status_message': w.get('status_message') or '',
             'plan_type': plan_type,
@@ -585,7 +585,7 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
     summary = {
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'disabled': 0, 'healthy': 0,
-        'used_ratio': 0, 'remaining_ratio': 0, 'accounts': [], 'last_run': None,
+        'used_ratio': None, 'remaining_ratio': None, 'accounts': [], 'last_run': None,
     }
     accounts: list[dict[str, Any]] = []
     warden_map = load_cpa_warden_accounts(target)
