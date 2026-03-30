@@ -115,6 +115,12 @@ const fmtNum = n => new Intl.NumberFormat('zh-CN').format(Number(n || 0));
 const fmtMb = n => `${Number(n || 0).toFixed(1)} MB`;
 const rangeLabel = key => ({'3h':'3小时','24h':'24小时','7d':'7天','30d':'30天','all':'所有时间'}[key] || '24小时');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtTime = s => {
+  if (!s) return '未知';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return String(s);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+};
 
 function downsample(history, maxPoints = 120) {
   if (!Array.isArray(history) || history.length <= maxPoints) return history || [];
@@ -291,7 +297,7 @@ function renderCpaCard(cpa) {
               <span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span>
             </div>
             <div class="progress"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
-            <div class="muted">剩余额度：${fmtMaybePct(acc.remaining_ratio)}${acc.status_message ? ` · ${esc(acc.status_message)}` : ''}</div>
+            <div class="muted">剩余额度：${fmtMaybePct(acc.remaining_ratio)}${acc.quota_checked_at ? ` · 更新于 ${fmtTime(acc.quota_checked_at)}` : ''}${acc.status_message ? ` · ${esc(acc.status_message)}` : ''}</div>
             <div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除凭证</button></div>
           </div>
         `).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>'}

@@ -35,6 +35,8 @@ WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 stop_event = threading.Event()
+quota_probe_cache: dict[str, dict[str, Any]] = {}
+QUOTA_CACHE_TTL_SECONDS = 60
 
 
 def utc_now() -> datetime:
@@ -435,6 +437,11 @@ def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, A
     auth_index = str(item.get('auth_index') or '').strip()
     id_token = item.get('id_token') or {}
     account_id = str(id_token.get('chatgpt_account_id') or item.get('chatgpt_account_id') or '').strip()
+    cache_key = f"{target.get('id')}::{item.get('name')}::{auth_index}::{account_id}"
+    now_ts = time.time()
+    cached = quota_probe_cache.get(cache_key)
+    if cached and (now_ts - float(cached.get('cached_at_ts') or 0) < QUOTA_CACHE_TTL_SECONDS):
+        return dict(cached)
     if not auth_index or not account_id:
         return None
     payload = {
@@ -464,12 +471,16 @@ def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, A
         return None
     rate_limit = body.get('rate_limit') if isinstance(body.get('rate_limit'), dict) else None
     remaining = extract_remaining_ratio(rate_limit)
-    return {
+    result = {
         'remaining_ratio': round(remaining * 100, 2) if remaining is not None else None,
         'quota_limited': bool(rate_limit.get('limit_reached')) if isinstance(rate_limit, dict) else False,
         'plan_type': str(body.get('plan_type') or item.get('plan_type') or ((item.get('id_token') or {}).get('plan_type')) or 'unknown').lower(),
         'quota_signal_source': 'wham-usage',
+        'quota_checked_at': now_iso(),
+        'cached_at_ts': now_ts,
     }
+    quota_probe_cache[cache_key] = dict(result)
+    return result
 
 
 def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -497,6 +508,10 @@ def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]]) -> l
                 files[idx]['usage_limit_reached'] = bool(info['quota_limited'])
             if info.get('plan_type'):
                 files[idx]['plan_type'] = info['plan_type']
+            if info.get('quota_signal_source'):
+                files[idx]['quota_signal_source'] = info['quota_signal_source']
+            if info.get('quota_checked_at'):
+                files[idx]['quota_checked_at'] = info['quota_checked_at']
     return files
 
 
@@ -527,6 +542,8 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
         'plan_type': plan_type,
         'api_status_code': api_status_code,
         'usage_limit_reached': item.get('usage_limit_reached'),
+        'quota_signal_source': item.get('quota_signal_source'),
+        'quota_checked_at': item.get('quota_checked_at'),
         'source': 'management-auth-files',
     }
 
