@@ -168,22 +168,44 @@ function renderUsageChart(historyRaw) {
   ], { labels: chartLabels(history), minY: 0, maxY: 100, beginAtZero: true, height: 240 });
 }
 
+function seriesRatePerMinute(history, key) {
+  if (!Array.isArray(history) || history.length < 2) return [];
+  const out = [];
+  for (let i = 1; i < history.length; i++) {
+    const prev = history[i - 1];
+    const cur = history[i];
+    const prevVal = Number(prev?.[key]);
+    const curVal = Number(cur?.[key]);
+    const prevTs = new Date(prev?.ts || 0).getTime();
+    const curTs = new Date(cur?.ts || 0).getTime();
+    if (!Number.isFinite(prevVal) || !Number.isFinite(curVal) || !prevTs || !curTs || curTs <= prevTs) {
+      out.push(0);
+      continue;
+    }
+    const diffMb = Math.max(0, curVal - prevVal);
+    const minutes = (curTs - prevTs) / 60000;
+    out.push(minutes > 0 ? diffMb / minutes : 0);
+  }
+  return out;
+}
+
 function renderTrafficChart(historyRaw) {
   const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
   const canvas = document.getElementById('trafficChart');
-  if (!canvas || !history.length) {
-    renderChartFallback(canvas, '暂无历史数据');
+  if (!canvas || history.length < 2) {
+    renderChartFallback(canvas, '暂无历史速率数据');
     return;
   }
   clearChartFallback(canvas);
   destroyCanvasChart(canvas);
-  const rx = history.map(x => Number(x.net_rx_mb) || 0);
-  const tx = history.map(x => Number(x.net_tx_mb) || 0);
+  const rx = seriesRatePerMinute(history, 'net_rx_mb');
+  const tx = seriesRatePerMinute(history, 'net_tx_mb');
+  const labels = chartLabels(history).slice(1);
   const allVals = rx.concat(tx);
   drawSimpleLineChart(canvas, [
-    { label: '下载', data: rx, color: '#22c55e' },
-    { label: '上传', data: tx, color: '#f472b6' },
-  ], { labels: chartLabels(history), minY: Math.min(...allVals), maxY: Math.max(...allVals), height: 240 });
+    { label: '下载速率', data: rx, color: '#22c55e' },
+    { label: '上传速率', data: tx, color: '#f472b6' },
+  ], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240 });
 }
 
 function renderProcesses(items) {
