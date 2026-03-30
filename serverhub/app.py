@@ -736,6 +736,26 @@ def api_scan_cpas():
     return jsonify({'results': results, 'cpas': [cpa_summary(t) for t in load_cpas()]})
 
 
+@app.get('/api/cpas/<cpa_id>')
+def api_get_cpa(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    return jsonify({'cpa': cpa_summary(target)})
+
+
+@app.post('/api/cpas/<cpa_id>/refresh')
+def api_refresh_cpa(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    try:
+        scan_result = scan_cpa(target)
+    except Exception as exc:
+        return jsonify({'error': str(exc), 'cpa': cpa_summary(target)}), 500
+    return jsonify({'ok': True, 'scan': scan_result, 'cpa': cpa_summary(target)})
+
+
 @app.delete('/api/cpas/<cpa_id>/auth-files/<path:file_name>')
 def api_delete_cpa_auth_file(cpa_id: str, file_name: str):
     target = next((x for x in load_cpas() if x['id'] == cpa_id), None)

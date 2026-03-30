@@ -256,18 +256,18 @@ function accountStatusClass(acc) {
   return 'ok';
 }
 
-function renderCpas(cpas) {
-  els.cpaList.innerHTML = cpas.map(cpa => {
+function renderCpaCard(cpa) {
     const knownQuotaAccounts = (cpa.accounts || []).filter(acc => acc.remaining_ratio !== null && acc.remaining_ratio !== undefined).length;
     const unknownQuotaAccounts = Math.max(0, (cpa.total || 0) - knownQuotaAccounts);
     return `
-    <div class="cpa-card">
+    <div class="cpa-card" data-cpa-id="${cpa.id}">
       <div class="cpa-head">
         <div>
           <div><strong>${cpa.name}</strong> <span class="badge">${cpa.provider}</span></div>
           <div class="muted">${cpa.base_url}</div>
         </div>
         <div class="cpa-actions">
+          <button class="ghost small-btn" onclick="refreshCpa('${cpa.id}')">刷新当前 CPA</button>
           <button class="ghost small-btn" onclick="delete401('${cpa.id}')">一键删除401</button>
           <button class="danger small-btn" onclick="deleteCpa('${cpa.id}')">删除 CPA</button>
         </div>
@@ -298,7 +298,17 @@ function renderCpas(cpas) {
       </div>
     </div>
   `;
-  }).join('');
+}
+
+function replaceCpaCard(cpa) {
+  const old = els.cpaList.querySelector(`[data-cpa-id="${cpa.id}"]`);
+  const html = renderCpaCard(cpa);
+  if (old) old.outerHTML = html;
+  else els.cpaList.insertAdjacentHTML('afterbegin', html);
+}
+
+function renderCpas(cpas) {
+  els.cpaList.innerHTML = cpas.map(renderCpaCard).join('');
 }
 
 function setActiveRangeBtn() {
@@ -340,19 +350,35 @@ async function loadAll(forceBust = false) {
 async function deleteCpa(id) {
   if (!confirm('确认删除这个 CPA 吗？')) return;
   await fetch(`/api/cpas/${id}`, {method:'DELETE'});
-  await loadAll(true);
+  const card = els.cpaList.querySelector(`[data-cpa-id="${id}"]`);
+  if (card) card.remove();
+}
+async function refreshCpa(id) {
+  const res = await fetch(`/api/cpas/${id}/refresh`, {method:'POST'});
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || '刷新失败');
+    if (data.cpa) replaceCpaCard(data.cpa);
+    return;
+  }
+  replaceCpaCard(data.cpa);
 }
 async function delete401(id) {
   if (!confirm('确认一键删除这个 CPA 里的 401 凭证吗？')) return;
-  await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'});
-  await loadAll(true);
+  const res = await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'});
+  const data = await res.json();
+  if (data.cpa) replaceCpaCard(data.cpa);
+  if (!res.ok) alert('删除401时有失败项');
 }
 async function deleteAuthFile(cpaId, encodedName) {
   if (!confirm('确认删除这个凭证吗？')) return;
-  await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'});
-  await loadAll(true);
+  const res = await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'});
+  const data = await res.json();
+  if (data.cpa) replaceCpaCard(data.cpa);
+  if (!res.ok) alert((data.result && data.result.text) || '删除失败');
 }
 window.deleteCpa = deleteCpa;
+window.refreshCpa = refreshCpa;
 window.delete401 = delete401;
 window.deleteAuthFile = deleteAuthFile;
 
