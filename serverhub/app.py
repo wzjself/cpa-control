@@ -526,7 +526,7 @@ def load_cpa_warden_accounts(target: dict[str, Any]) -> dict[str, dict[str, Any]
     return out
 
 
-def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str, dict[str, Any]], include_warden_only: bool = True) -> list[dict[str, Any]]:
     merged = []
     seen = set()
     for acc in auth_accounts:
@@ -557,6 +557,9 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'source': 'merged',
         })
         seen.add(key)
+    if not include_warden_only:
+        return merged
+
     for key, w in warden_map.items():
         if key in seen:
             continue
@@ -592,7 +595,7 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
     try:
         files = fetch_cpa_auth_files(target)
         live_accounts = [classify_cpa_file(item) for item in files]
-        accounts = merge_cpa_accounts(live_accounts, warden_map)
+        accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
         summary['last_run'] = {
             'source': 'management-auth-files+warden-db',
             'count': len(accounts),
@@ -660,12 +663,28 @@ def index():
 @app.get('/api/overview')
 def api_overview():
     range_key = request.args.get('range', '24h')
+    include_cpas = request.args.get('include_cpas', '1') != '0'
+    include_clirelay = request.args.get('include_clirelay', '1') != '0'
+    hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
+    history_hours = hours_map.get(range_key, 24)
+    payload = {
+        'server': get_metric_summary(history_hours),
+        'range': range_key,
+    }
+    if include_clirelay:
+        payload['clirelay'] = get_clirelay_summary()
+    if include_cpas:
+        payload['cpas'] = [cpa_summary(t) for t in load_cpas()]
+    return jsonify(payload)
+
+
+@app.get('/api/server-status')
+def api_server_status():
+    range_key = request.args.get('range', '24h')
     hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
     history_hours = hours_map.get(range_key, 24)
     return jsonify({
         'server': get_metric_summary(history_hours),
-        'clirelay': get_clirelay_summary(),
-        'cpas': [cpa_summary(t) for t in load_cpas()],
         'range': range_key,
     })
 

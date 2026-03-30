@@ -307,11 +307,7 @@ function setActiveRangeBtn() {
   });
 }
 
-async function loadAll(forceBust = false) {
-  const url = `/api/overview?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`;
-  const res = await fetch(url, { cache: 'no-store' });
-  const data = await res.json();
-  const server = data.server;
+function renderServer(server) {
   els.healthScore.textContent = server.health;
   els.cpuNow.textContent = fmtPct(server.latest.cpu_percent);
   els.memNow.textContent = fmtPct(server.latest.mem_percent);
@@ -321,10 +317,24 @@ async function loadAll(forceBust = false) {
   els.trafficChartTitle.textContent = `网络上行 / 下载历史（${rangeLabel(currentRange)}）`;
   setActiveRangeBtn();
   renderProcesses(server.top_processes || []);
-  renderRelayStats(data.clirelay || {});
-  renderCpas(data.cpas || []);
   try { renderUsageChart(server.history || []); } catch (e) { console.error('usage chart render failed', e); }
   try { renderTrafficChart(server.history || []); } catch (e) { console.error('traffic chart render failed', e); }
+}
+
+async function loadServerStatus(forceBust = false) {
+  const url = `/api/server-status?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`;
+  const res = await fetch(url, { cache: 'no-store' });
+  const data = await res.json();
+  renderServer(data.server);
+}
+
+async function loadAll(forceBust = false) {
+  const url = `/api/overview?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`;
+  const res = await fetch(url, { cache: 'no-store' });
+  const data = await res.json();
+  renderServer(data.server);
+  renderRelayStats(data.clirelay || {});
+  renderCpas(data.cpas || []);
 }
 
 async function deleteCpa(id) {
@@ -380,4 +390,5 @@ els.cpaForm.addEventListener('submit', async (e) => {
 });
 
 loadAll(true);
-setInterval(() => loadAll(true), 60000);
+setInterval(() => loadServerStatus(true), 2000);
+setInterval(() => loadAll(true), 30000);
