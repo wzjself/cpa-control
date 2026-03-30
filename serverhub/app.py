@@ -770,6 +770,37 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
         summary['accounts'] = accounts[:200]
     return summary
 
+def upload_cpa_auth_file(target: dict[str, Any], file_name: str, content: str) -> dict[str, Any]:
+    base = target['base_url'].rstrip('/')
+    upload_url = f"{base}/v0/management/auth-files"
+    data_bytes = (content or '').encode('utf-8')
+    try:
+        multipart_resp = requests.post(
+            upload_url,
+            headers=mgmt_headers(target['token']),
+            files={'file': (file_name, data_bytes, 'application/json')},
+            timeout=30,
+        )
+        if multipart_resp.status_code in (200, 201):
+            return {'ok': True, 'status_code': multipart_resp.status_code, 'text': multipart_resp.text[:300], 'mode': 'multipart'}
+        if multipart_resp.status_code not in (404, 405, 415):
+            return {'ok': False, 'status_code': multipart_resp.status_code, 'text': multipart_resp.text[:300], 'mode': 'multipart'}
+    except Exception as exc:
+        return {'ok': False, 'status_code': None, 'text': str(exc), 'mode': 'multipart'}
+
+    raw_url = f"{upload_url}?name={urllib.parse.quote(file_name, safe='')}"
+    try:
+        raw_resp = requests.post(
+            raw_url,
+            headers={**mgmt_headers(target['token']), 'Content-Type': 'application/json'},
+            data=content or '',
+            timeout=30,
+        )
+        return {'ok': raw_resp.status_code in (200, 201), 'status_code': raw_resp.status_code, 'text': raw_resp.text[:300], 'mode': 'raw-json'}
+    except Exception as exc:
+        return {'ok': False, 'status_code': None, 'text': str(exc), 'mode': 'raw-json'}
+
+
 def delete_cpa_auth_file(target: dict[str, Any], name: str) -> dict[str, Any]:
     url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files?name={urllib.parse.quote(name, safe='')}"
     r = requests.delete(url, headers=mgmt_headers(target['token']), timeout=30)
