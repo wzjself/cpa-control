@@ -759,7 +759,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
     return merged
 
 
-def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
+def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
     summary = {
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'disabled': 0, 'healthy': 0,
@@ -767,17 +767,20 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
     }
     accounts: list[dict[str, Any]] = []
     warden_map = load_cpa_warden_accounts(target)
-    try:
-        files = hydrate_live_quota(target, fetch_cpa_auth_files(target))
-        live_accounts = [classify_cpa_file(item) for item in files]
-        accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
-        summary['last_run'] = {
-            'source': 'management-auth-files+warden-db',
-            'count': len(accounts),
-            'live_count': len(live_accounts),
-            'warden_count': len(warden_map),
-        }
-    except Exception:
+    if live:
+        try:
+            files = hydrate_live_quota(target, fetch_cpa_auth_files(target))
+            live_accounts = [classify_cpa_file(item) for item in files]
+            accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
+            summary['last_run'] = {
+                'source': 'management-auth-files+warden-db',
+                'count': len(accounts),
+                'live_count': len(live_accounts),
+                'warden_count': len(warden_map),
+            }
+        except Exception:
+            pass
+    if not accounts:
         db = cpa_db_path(target['id'])
         if db.exists():
             conn = sqlite3.connect(db)
@@ -884,7 +887,7 @@ def api_overview():
     if include_clirelay:
         payload['clirelay'] = get_clirelay_summary()
     if include_cpas:
-        payload['cpas'] = [cpa_summary(t) for t in load_cpas()]
+        payload['cpas'] = [cpa_summary(t, live=False) for t in load_cpas()]
     return jsonify(payload)
 
 
@@ -943,7 +946,7 @@ def api_scan_cpas():
     for target in load_cpas():
         result = scan_cpa(target)
         results.append({'id': target['id'], 'name': target['name'], **result})
-    return jsonify({'results': results, 'cpas': [cpa_summary(t) for t in load_cpas()]})
+    return jsonify({'results': results, 'cpas': [cpa_summary(t, live=False) for t in load_cpas()]})
 
 
 
@@ -1040,7 +1043,7 @@ def api_get_cpa(cpa_id: str):
     target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
     if not target:
         return jsonify({'error': 'CPA 不存在'}), 404
-    return jsonify({'cpa': cpa_summary(target)})
+    return jsonify({'cpa': cpa_summary(target, live=False)})
 
 
 @app.post('/api/cpas/<cpa_id>/refresh')
@@ -1051,8 +1054,8 @@ def api_refresh_cpa(cpa_id: str):
     try:
         scan_result = scan_cpa(target)
     except Exception as exc:
-        return jsonify({'error': str(exc), 'cpa': cpa_summary(target)}), 500
-    return jsonify({'ok': True, 'scan': scan_result, 'cpa': cpa_summary(target)})
+        return jsonify({'error': str(exc), 'cpa': cpa_summary(target, live=False)}), 500
+    return jsonify({'ok': True, 'scan': scan_result, 'cpa': cpa_summary(target, live=True)})
 
 
 @app.delete('/api/cpas/<cpa_id>/auth-files/<path:file_name>')
