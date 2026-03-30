@@ -1,0 +1,36 @@
+[
+  {
+    "name": "andrewbrown8374@outlook.com.json",
+    "account": "AndrewBrown8374@outlook.com",
+    "email": "AndrewBrown8374@outlook.com",
+    "provider": "codex",
+    "source": "file",
+    "disabled": false,
+    "unavailable": true,
+    "auth_index": "4b42c886b328994b",
+    "chatgpt_account_id": "ff68e7b9-0a72-4baf-8a8a-a5f65dc55ec9",
+    "api_http_status": 200,
+    "api_status_code": 200,
+    "status": "error",
+    "status_message": "{\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"free\",\"resets_at\":1775401069,\"eligible_promo\":{\"campaign_id\":\"plus-1-month-free\",\"message\":\"To continue using Codex and get access to GPT-5.3-Codex, start a free trial of Plus today (https://chatgpt.com/explore/plus)\"},\"resets_in_seconds\":567604}}",
+    "probe_error_kind": null,
+    "probe_error_text": null
+  },
+  {
+    "name": "arthurgreen4864@outlook.com.json",
+    "account": "ArthurGreen4864@outlook.com",
+    "email": "ArthurGreen4864@outlook.com",
+    "provider": "codex",
+    "source": "file",
+    "disabled": false,
+    "unavailable": true,
+    "auth_index": "cb29401f25ef63ce",
+    "chatgpt_account_id": "f103b852-9c6a-4caf-bbbd-2655e5fff323",
+    "api_http_status": 200,
+    "api_status_code": 200,
+    "status": "error",
+    "status_message": "{\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"free\",\"resets_at\":1775406549,\"eligible_promo\":{\"campaign_id\":\"plus-1-month-free\",\"message\":\"To continue using Codex and get access to GPT-5.3-Codex, start a free trial of Plus today (https://chatgpt.com/explore/plus)\"},\"resets_in_seconds\":572364}}",
+    "probe_error_kind": null,
+    "probe_error_text": null
+  }
+]

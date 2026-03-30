@@ -1,0 +1,21 @@
+{
+  "base_url": "http://61.164.246.132:25836",
+  "token": "iqge114514",
+  "target_type": "codex",
+  "provider": "",
+  "probe_workers": 50,
+  "action_workers": 20,
+  "timeout": 15,
+  "retries": 2,
+  "delete_retries": 1,
+  "quota_action": "none",
+  "invalid_401_action": "none",
+  "delete_401": false,
+  "auto_reenable": false,
+  "reenable_scope": "signal",
+  "db_path": "/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043.sqlite3",
+  "invalid_output": "/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043_401.json",
+  "quota_output": "/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043_quota.json",
+  "log_file": "/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043.log",
+  "debug": false
+}

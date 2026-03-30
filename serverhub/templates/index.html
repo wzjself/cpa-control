@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>服务器总览</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="hero">
+      <div>
+        <h1>服务器总览 😼</h1>
+        <p>服务器指标 + CPA 扫描 + clirelay 仪表盘</p>
+      </div>
+      <button id="refreshAllBtn">刷新全部</button>
+    </header>
+
+    <section class="grid metrics-grid">
+      <div class="card stat-card"><div class="label">健康度</div><div class="value" id="healthScore">--</div></div>
+      <div class="card stat-card"><div class="label">CPU</div><div class="value" id="cpuNow">--</div></div>
+      <div class="card stat-card"><div class="label">内存</div><div class="value" id="memNow">--</div></div>
+      <div class="card stat-card"><div class="label">磁盘</div><div class="value" id="diskNow">--</div></div>
+      <div class="card stat-card"><div class="label">24h 下载/上传</div><div class="value small" id="trafficNow">--</div></div>
+    </section>
+
+    <section class="grid charts-grid">
+      <div class="card chart-card"><h3>CPU / 内存 / 磁盘（24h）</h3><canvas id="usageChart"></canvas></div>
+      <div class="card chart-card"><h3>网络累计流量（24h）</h3><canvas id="trafficChart"></canvas></div>
+    </section>
+
+    <section class="grid two-col">
+      <div class="card"><h3>前五高占用进程</h3><div id="processList" class="list"></div></div>
+      <div class="card"><h3>clirelay 总览</h3><div id="relayStats" class="stats-list"></div><canvas id="relayChart"></canvas></div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h3>CPA 管理</h3>
+          <p>导入不同 CPA，统一扫描凭证状态与剩余额度</p>
+        </div>
+        <button id="scanCpasBtn">刷新并扫描全部 CPA</button>
+      </div>
+      <form id="cpaForm" class="cpa-form">
+        <input name="name" placeholder="CPA 名称">
+        <input name="base_url" placeholder="CPA 链接，例如 http://1.2.3.4:25836">
+        <input name="token" placeholder="管理密码 / token">
+        <select name="provider"><option value="codex">codex</option></select>
+        <button type="submit">添加 CPA</button>
+      </form>
+      <div id="cpaList" class="cpa-list"></div>
+    </section>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

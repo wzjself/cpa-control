@@ -1,0 +1,46 @@
+2026-03-30 01:51:34,219 | INFO | 日志文件: /root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043.log
+2026-03-30 01:51:34,219 | INFO | 调试模式: off
+2026-03-30 01:51:34,219 | DEBUG | 运行参数: mode=scan target_type=codex provider= probe_workers=50 action_workers=20 timeout=15 retries=2 delete_retries=1 invalid_401_action=none probe_error_action=none quota_action=none quota_disable_threshold=0.0 delete_401=False auto_reenable=False reenable_scope=signal upload_dir= upload_workers=20 upload_retries=2 upload_method=json upload_recursive=False upload_force=False min_valid_accounts=0 refill_strategy=to-threshold auto_register=False register_timeout=300 register_workdir= db_path=/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043.sqlite3
+2026-03-30 01:51:34,234 | INFO | 开始扫描: mode=scan db=/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043.sqlite3 log=/root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043.log quota_disable_threshold=0.0
+2026-03-30 01:51:34,234 | INFO | 开始拉取 auth-files 列表
+2026-03-30 01:51:34,234 | DEBUG | GET http://61.164.246.132:25836/v0/management/auth-files
+2026-03-30 01:51:34,518 | INFO | auth-files 拉取完成: 14
+2026-03-30 01:51:34,527 | INFO | 开始并发探测 wham/usage: candidates=14 workers=50 timeout=15s retries=2
+2026-03-30 01:51:34,528 | DEBUG | 开始探测账号: name=andrewbrown8374@outlook.com.json auth_index=4b42c886b328994b unavailable=True disabled=False has_account_id=yes
+2026-03-30 01:51:34,530 | DEBUG | 开始探测账号: name=arthurgreen4864@outlook.com.json auth_index=cb29401f25ef63ce unavailable=True disabled=False has_account_id=yes
+2026-03-30 01:51:34,532 | DEBUG | 开始探测账号: name=catherinepace9477@outlook.com.json auth_index=b824b5b509dec7a9 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,532 | DEBUG | 开始探测账号: name=christinasimmons5677@outlook.com.json auth_index=478fedcf80ea9c2a unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,534 | DEBUG | 开始探测账号: name=crystalnorman6419@outlook.com.json auth_index=ee9ab32226e6c377 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,535 | DEBUG | 开始探测账号: name=gabriellewalker7169@outlook.com.json auth_index=b6fe2de74cc28802 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,535 | DEBUG | 开始探测账号: name=jasminemiller8133@outlook.com.json auth_index=b0355a7aa98b895e unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,537 | DEBUG | 开始探测账号: name=jenniferanderson1258@outlook.com.json auth_index=7400db73973ce3a6 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,537 | DEBUG | 开始探测账号: name=jonathangarrett3793@outlook.com.json auth_index=7410e58c6cabb469 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,537 | DEBUG | 开始探测账号: name=justinswanson8407@outlook.com.json auth_index=51e518123302b4e6 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,539 | DEBUG | 开始探测账号: name=mrsteven8097@outlook.com.json auth_index=0188a9a64e49e1f0 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,540 | DEBUG | 开始探测账号: name=sarahsmith2892@outlook.com.json auth_index=3d497b0902a469a4 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,541 | DEBUG | 开始探测账号: name=sergu491b07@sm.hush2u.com.json auth_index=29b00b976f6d6935 unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:34,541 | DEBUG | 开始探测账号: name=tanyapowers3210@outlook.com.json auth_index=ceff148e27beca9f unavailable=False disabled=False has_account_id=yes
+2026-03-30 01:51:36,229 | DEBUG | 探测完成: name=andrewbrown8374@outlook.com.json api_http=200 status_code=200 limit_reached=1 allowed=0 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,271 | DEBUG | 探测完成: name=jonathangarrett3793@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,272 | DEBUG | 探测完成: name=catherinepace9477@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,282 | DEBUG | 探测完成: name=justinswanson8407@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,305 | DEBUG | 探测完成: name=crystalnorman6419@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,308 | DEBUG | 探测完成: name=sarahsmith2892@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,322 | DEBUG | 探测完成: name=arthurgreen4864@outlook.com.json api_http=200 status_code=200 limit_reached=1 allowed=0 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,364 | DEBUG | 探测完成: name=sergu491b07@sm.hush2u.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,425 | DEBUG | 探测完成: name=tanyapowers3210@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,494 | DEBUG | 探测完成: name=mrsteven8097@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,495 | DEBUG | 探测完成: name=jenniferanderson1258@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,507 | DEBUG | 探测完成: name=christinasimmons5677@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:36,509 | DEBUG | 探测完成: name=jasminemiller8133@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:37,453 | DEBUG | 探测完成: name=gabriellewalker7169@outlook.com.json api_http=200 status_code=200 limit_reached=0 allowed=1 source=primary remaining_ratio=None spark_limit_reached=None spark_remaining_ratio=None
+2026-03-30 01:51:37,453 | INFO | 探测进度: 14/14
+2026-03-30 01:51:37,462 | INFO | 总认证文件数: 14
+2026-03-30 01:51:37,462 | INFO | 符合过滤条件账号数: 14
+2026-03-30 01:51:37,462 | INFO | 401 账号数: 2
+2026-03-30 01:51:37,462 | INFO | 限额账号数: 0
+2026-03-30 01:51:37,462 | INFO | 恢复候选账号数: 0
+2026-03-30 01:51:37,462 | DEBUG | 状态分布: {'active': 12, 'error': 2}
+2026-03-30 01:51:37,463 | INFO | 已导出 401 列表: /root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043_401.json
+2026-03-30 01:51:37,463 | INFO | 已导出限额列表: /root/.openclaw/workspace/serverhub/data/cpa_48f4458c1043_quota.json
+2026-03-30 01:51:37,463 | INFO | 扫描完成
