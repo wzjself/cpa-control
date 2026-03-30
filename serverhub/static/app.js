@@ -22,6 +22,7 @@ const els = {
   trafficChartTitle: document.getElementById('trafficChartTitle'),
   timeRangeSwitch: document.getElementById('timeRangeSwitch'),
   credentialStoreList: document.getElementById('credentialStoreList'),
+  syncCredentialStatusBtn: document.getElementById('syncCredentialStatusBtn'),
   selectAllCredentialsBtn: document.getElementById('selectAllCredentialsBtn'),
   deploySelectedBtn: document.getElementById('deploySelectedBtn'),
   credentialTargetSelect: document.getElementById('credentialTargetSelect'),
@@ -143,12 +144,14 @@ async function deploySelectedCredentials() { const run = async () => { const tar
 async function addCpa(e) { e.preventDefault(); const fd = new FormData(els.cpaForm); const payload = Object.fromEntries(fd.entries()); await fetch('/api/cpas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}); els.cpaForm.reset(); await loadAll(true); }
 async function scanCpas() { const run = async () => { await fetch('/api/cpas/scan', {method:'POST'}); await loadAll(true); }; return withButtonLoading(els.scanCpasBtn, '扫描中...', run)(); }
 async function refreshAll() { const run = async () => { await loadAll(true); }; return withButtonLoading(els.refreshAllBtn, '刷新中...', run)(); }
+async function syncCredentialStatus() { const run = async () => { const res = await fetch('/api/credentials/sync-upload-status', { method:'POST' }); const data = await res.json(); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); alert(`状态已更新：匹配到 ${data.matched || 0} 个已上传凭证`); }; return withButtonLoading(els.syncCredentialStatusBtn, '更新中...', run)(); }
 async function refreshServerOnly() { const run = async () => { await loadServerStatus(true); }; return withButtonLoading(els.refreshServerBtn, '刷新中...', run)(); }
 window.deleteCpa = deleteCpa; window.refreshCpa = refreshCpa; window.delete401 = delete401; window.deleteAuthFile = deleteAuthFile; window.toggleCredentialSelect = toggleCredentialSelect; window.deleteCredential = deleteCredential;
 els.cpaForm?.addEventListener('submit', addCpa);
 els.refreshServerBtn?.addEventListener('click', refreshServerOnly);
 els.refreshAllBtn?.addEventListener('click', refreshAll);
 els.scanCpasBtn?.addEventListener('click', scanCpas);
+els.syncCredentialStatusBtn?.addEventListener('click', syncCredentialStatus);
 els.selectAllCredentialsBtn?.addEventListener('click', () => { const boxes = Array.from(document.querySelectorAll('#credentialStoreList input[type="checkbox"]')); const allChecked = boxes.length > 0 && boxes.every(el => el.checked); boxes.forEach(el => { const next = !allChecked; el.checked = next; const id = el.closest('.credential-item')?.dataset.credId; if (id) toggleCredentialSelect(id, next); }); });
 els.deploySelectedBtn?.addEventListener('click', deploySelectedCredentials);
 els.credentialSearchInput?.addEventListener('input', e => { credentialSearch = e.target.value || ''; renderCredentialStore(latestCredentials, latestCpas); });

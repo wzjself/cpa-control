@@ -1030,6 +1030,34 @@ def api_delete_cpa_401(cpa_id: str):
     return jsonify({'deleted': deleted, 'failed': failed, 'cpa': cpa_summary(target)})
 
 
+
+
+@app.post('/api/credentials/sync-upload-status')
+def api_sync_credential_upload_status():
+    cpas = load_cpas()
+    matched = 0
+    conn = get_conn()
+    creds = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
+    all_names = {}
+    for cpa in cpas:
+        summary = cpa_summary(cpa)
+        for acc in summary.get('accounts', []):
+            raw_name = (acc.get('email') or acc.get('name') or '').strip()
+            if raw_name:
+                all_names[raw_name.lower()] = cpa['id']
+    now = now_iso()
+    for row in creds:
+        raw = (row.get('name') or row.get('filename') or '').strip().lower()
+        target_id = all_names.get(raw)
+        if target_id:
+            matched += 1
+            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 1, last_target_id = ?, updated_at = ? WHERE id = ?', (target_id, now, row['id']))
+        else:
+            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, updated_at = ? WHERE id = ?', (now, row['id']))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'matched': matched, 'credentials': list_credentials(), 'cpas': cpas})
+
 @app.get('/api/history')
 def api_history():
     hours = int(request.args.get('hours', '24'))
