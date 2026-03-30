@@ -26,8 +26,18 @@
     </section>
 
     <section class="grid charts-grid">
-      <div class="card chart-card"><h3>CPU / 内存 / 磁盘（24h）</h3><canvas id="usageChart"></canvas></div>
-      <div class="card chart-card"><h3>网络累计流量（24h）</h3><canvas id="trafficChart"></canvas></div>
+      <div class="card chart-card">
+        <div class="chart-head">
+          <h3 id="usageChartTitle">CPU / 内存 / 磁盘（24小时）</h3>
+          <select id="timeRangeSelect">
+            <option value="24h" selected>24小时</option>
+            <option value="3h">3小时</option>
+            <option value="all">所有时间</option>
+          </select>
+        </div>
+        <canvas id="usageChart"></canvas>
+      </div>
+      <div class="card chart-card"><h3 id="trafficChartTitle">网络累计流量（24小时）</h3><canvas id="trafficChart"></canvas></div>
     </section>
 
     <section class="grid two-col">

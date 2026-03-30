@@ -208,16 +208,19 @@ def sampler_loop() -> None:
         stop_event.wait(SAMPLE_INTERVAL)
 
 
-def get_metric_history(hours: int = 24) -> list[dict[str, Any]]:
-    since = (utc_now() - timedelta(hours=hours)).isoformat()
+def get_metric_history(hours: int | None = 24) -> list[dict[str, Any]]:
     conn = get_conn()
-    rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples WHERE ts >= ? ORDER BY ts", (since,)).fetchall()]
+    if hours is None:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples ORDER BY ts").fetchall()]
+    else:
+        since = (utc_now() - timedelta(hours=hours)).isoformat()
+        rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples WHERE ts >= ? ORDER BY ts", (since,)).fetchall()]
     conn.close()
     return rows
 
 
-def get_metric_summary() -> dict[str, Any]:
-    history = get_metric_history(24)
+def get_metric_summary(history_hours: int | None = 24) -> dict[str, Any]:
+    history = get_metric_history(history_hours)
     latest = history[-1] if history else collect_sample()
     totals = {'rx_mb': 0.0, 'tx_mb': 0.0}
     if history:
@@ -442,10 +445,14 @@ def index():
 
 @app.get('/api/overview')
 def api_overview():
+    range_key = request.args.get('range', '24h')
+    hours_map = {'3h': 3, '24h': 24, 'all': None}
+    history_hours = hours_map.get(range_key, 24)
     return jsonify({
-        'server': get_metric_summary(),
+        'server': get_metric_summary(history_hours),
         'clirelay': get_clirelay_summary(),
         'cpas': [cpa_summary(t) for t in load_cpas()],
+        'range': range_key,
     })
 
 
