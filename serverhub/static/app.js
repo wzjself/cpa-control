@@ -1,4 +1,4 @@
-let usageChart, trafficChart, relayChart;
+let usageChart, trafficChart;
 
 const els = {
   refreshAllBtn: document.getElementById('refreshAllBtn'),
@@ -53,23 +53,6 @@ function renderTrafficChart(history) {
   trafficChart = new Chart(document.getElementById('trafficChart'), config);
 }
 
-function renderRelayChart(recent) {
-  const trimmed = recent.slice(-60);
-  const config = {
-    type: 'bar',
-    data: {
-      labels: trimmed.map(x => (x.minute || '').slice(11,16)),
-      datasets: [
-        {label: '请求数', data: trimmed.map(x => x.requests), backgroundColor: '#60a5fa'},
-        {label: 'Token', data: trimmed.map(x => x.tokens), backgroundColor: '#22c55e'},
-      ]
-    },
-    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200}
-  };
-  if (relayChart) relayChart.destroy();
-  relayChart = new Chart(document.getElementById('relayChart'), config);
-}
-
 function renderProcesses(items) {
   els.processList.innerHTML = items.map(p => `
     <div class="process-item">
@@ -101,7 +84,6 @@ function renderRelayStats(data) {
   ` + topKeys.map(x => `
     <div class="relay-item"><strong>${x.name || x.api_key_name || '未命名'}</strong><div class="muted">请求 ${fmtNum(x.requests)} · Token ${fmtNum(x.tokens || x.total_tokens)}${x.success_count !== undefined ? ` · 成功 ${fmtNum(x.success_count)}` : ''}</div></div>
   `).join('');
-  renderRelayChart(data.recent || []);
 }
 
 function accountStatusClass(acc) {
@@ -126,7 +108,10 @@ function renderCpas(cpas) {
         <div class="mini-stat"><div class="muted">限额</div><div class="n warn">${fmtNum(cpa.quota_limited)}</div></div>
         <div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div>
       </div>
-      <div style="margin-top:12px"><div class="muted">额度汇总：已用 ${cpa.used_ratio || 0}% · 剩余 ${cpa.remaining_ratio || 0}%</div><div class="progress used"><span style="width:${cpa.used_ratio || 0}%"></span></div></div>
+      <div class="quota-row">
+        <div class="quota-label"><span>总凭证额度使用情况</span><span>已用 ${cpa.used_ratio || 0}% / 总额度 100%</span></div>
+        <div class="progress used"><span style="width:${cpa.used_ratio || 0}%"></span></div>
+      </div>
       <div class="muted" style="margin:10px 0">凭证列表（最多展示 200 条）</div>
       <div class="list">
         ${(cpa.accounts || []).map(acc => `
