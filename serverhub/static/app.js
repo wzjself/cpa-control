@@ -30,7 +30,7 @@ function renderUsageChart(history) {
         {label: '磁盘', data: history.map(x => x.disk_percent), borderColor: '#f59e0b', tension: .25},
       ]
     },
-    options: {responsive:true, maintainAspectRatio:false}
+    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200}
   };
   if (usageChart) usageChart.destroy();
   usageChart = new Chart(document.getElementById('usageChart'), config);
@@ -47,7 +47,7 @@ function renderTrafficChart(history) {
         {label: '上传累计 MB', data: history.map(x => x.net_tx_mb), borderColor: '#f472b6', tension: .25},
       ]
     },
-    options: {responsive:true, maintainAspectRatio:false}
+    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200}
   };
   if (trafficChart) trafficChart.destroy();
   trafficChart = new Chart(document.getElementById('trafficChart'), config);
@@ -64,7 +64,7 @@ function renderRelayChart(recent) {
         {label: 'Token', data: trimmed.map(x => x.tokens), backgroundColor: '#22c55e'},
       ]
     },
-    options: {responsive:true, maintainAspectRatio:false}
+    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200}
   };
   if (relayChart) relayChart.destroy();
   relayChart = new Chart(document.getElementById('relayChart'), config);
