@@ -37,6 +37,8 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 stop_event = threading.Event()
 quota_probe_cache: dict[str, dict[str, Any]] = {}
 QUOTA_CACHE_TTL_SECONDS = 60
+clirelay_summary_cache: dict[str, Any] = {'data': None, 'cached_at_ts': 0.0}
+CLIRELAY_CACHE_TTL_SECONDS = 1.0
 
 
 def utc_now() -> datetime:
@@ -284,14 +286,20 @@ def get_metric_summary(history_hours: int | None = 24, clirelay: dict[str, Any] 
     }
 
 
-def get_clirelay_summary() -> dict[str, Any]:
+def get_clirelay_summary(force: bool = False) -> dict[str, Any]:
+    now_ts = time.time()
+    cached = clirelay_summary_cache.get('data')
+    cached_at_ts = float(clirelay_summary_cache.get('cached_at_ts') or 0)
+    if (not force) and cached is not None and (now_ts - cached_at_ts) < CLIRELAY_CACHE_TTL_SECONDS:
+        return dict(cached)
+
     try:
         import requests  # type: ignore
         headers = {'x-management-key': CLIRELAY_MGMT_KEY}
-        dash = requests.get(f'{CLIRELAY_BASE}/v0/management/dashboard-summary?days=7', headers=headers, timeout=20)
-        chart = requests.get(f'{CLIRELAY_BASE}/v0/management/usage/chart-data?days=7', headers=headers, timeout=20)
-        system = requests.get(f'{CLIRELAY_BASE}/v0/management/system-stats', headers=headers, timeout=20)
-        auth_files = requests.get(f'{CLIRELAY_BASE}/v0/management/auth-files', headers=headers, timeout=20)
+        dash = requests.get(f'{CLIRELAY_BASE}/v0/management/dashboard-summary?days=7', headers=headers, timeout=3)
+        chart = requests.get(f'{CLIRELAY_BASE}/v0/management/usage/chart-data?days=7', headers=headers, timeout=3)
+        system = requests.get(f'{CLIRELAY_BASE}/v0/management/system-stats', headers=headers, timeout=3)
+        auth_files = requests.get(f'{CLIRELAY_BASE}/v0/management/auth-files', headers=headers, timeout=3)
         if dash.ok and chart.ok and system.ok:
             dash_j = dash.json()
             chart_j = chart.json()
@@ -305,7 +313,7 @@ def get_clirelay_summary() -> dict[str, Any]:
             sys_mem = float(sys_j.get('system_mem_pct', 0) or 0)
             sys_disk = float(sys_j.get('disk_pct', 0) or 0)
             health_score = int(max(0, min(100, round(100 - (sys_cpu * 0.35 + sys_mem * 0.35 + sys_disk * 0.30)))))
-            return {
+            result = {
                 'available': True,
                 'source': 'management-api',
                 'request_count': int(kpi.get('total_requests', 0) or 0),
@@ -327,11 +335,17 @@ def get_clirelay_summary() -> dict[str, Any]:
                 'auth_files': auth_j.get('files', []),
                 'models': chart_j.get('model_distribution', []),
             }
+            clirelay_summary_cache['data'] = dict(result)
+            clirelay_summary_cache['cached_at_ts'] = now_ts
+            return result
     except Exception:
         pass
 
     if not CLIRELAY_DB.exists():
-        return {'available': False}
+        result = {'available': False, 'request_count': 0, 'total_tokens': 0, 'rpm': 0, 'tpm': 0}
+        clirelay_summary_cache['data'] = dict(result)
+        clirelay_summary_cache['cached_at_ts'] = now_ts
+        return result
     conn = sqlite3.connect(CLIRELAY_DB)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
@@ -375,7 +389,7 @@ def get_clirelay_summary() -> dict[str, Any]:
     conn.close()
     request_count = total.get('request_count') or 0
     success_count = total.get('success_count') or 0
-    return {
+    result = {
         'available': True,
         'source': 'usage-db',
         'request_count': request_count,
@@ -389,6 +403,9 @@ def get_clirelay_summary() -> dict[str, Any]:
         'top_api_keys': by_key,
         'recent': recent,
     }
+    clirelay_summary_cache['data'] = dict(result)
+    clirelay_summary_cache['cached_at_ts'] = now_ts
+    return result
 
 
 def get_cpa_usage_stats(target: dict[str, Any]) -> dict[str, Any]:
@@ -965,6 +982,7 @@ def api_server_status():
     history_hours = hours_map.get(range_key, 24)
     return jsonify({
         'server': get_metric_summary(history_hours),
+        'clirelay': get_clirelay_summary(),
         'range': range_key,
     })
 

@@ -173,5 +173,5 @@ els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(
 els.toggleCredentialFoldBtn?.addEventListener('click', () => { credentialStoreExpanded = !credentialStoreExpanded; renderCredentialStore(latestCredentials, latestCpas); });
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
-setInterval(() => loadServerStatus(true), 5000);
+setInterval(() => loadServerStatus(true), 1000);
 setInterval(() => loadAll(true), 60000);
