@@ -934,7 +934,7 @@ def api_deploy_credentials():
     for row in rows:
         name = row.get('filename') or row.get('name') or f"{row['id']}.json"
         url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files?name={urllib.parse.quote(name, safe='')}"
-        resp = requests.put(url, headers={**mgmt_headers(target['token']), 'Content-Type': 'application/json'}, data=row.get('content') or '', timeout=30)
+        resp = requests.post(url, headers={**mgmt_headers(target['token']), 'Content-Type': 'application/json'}, data=row.get('content') or '', timeout=30)
         ok = resp.ok
         results.append({'id': row['id'], 'name': row['name'], 'filename': name, 'ok': ok, 'status_code': resp.status_code, 'text': resp.text[:300]})
         if ok:
