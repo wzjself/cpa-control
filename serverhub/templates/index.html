@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>服务器总览</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330s">
-  <script src="/static/vendor/chart.umd.js?v=20260330s"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260330t">
+  <script src="/static/vendor/chart.umd.js?v=20260330t"></script>
 </head>
 <body>
   <div class="container">
@@ -92,6 +92,11 @@
 
       <div class="credential-toolbar">
         <input id="credentialSearchInput" placeholder="搜索仓库凭证 / 目标 CPA">
+        <select id="credentialUploadFilter">
+          <option value="all">全部</option>
+          <option value="uploaded">已上传</option>
+          <option value="pending">未上传</option>
+        </select>
         <button id="selectAllCredentialsBtn" type="button">全选/反选</button>
       </div>
 
@@ -104,6 +109,6 @@
     </section>
 
   </div>
-  <script src="/static/app.js?v=20260330s"></script>
+  <script src="/static/app.js?v=20260330t"></script>
 </body>
 </html>
