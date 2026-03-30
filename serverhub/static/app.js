@@ -26,6 +26,7 @@ const els = {
   credentialTargetSelect: document.getElementById('credentialTargetSelect'),
   credentialSearchInput: document.getElementById('credentialSearchInput'),
   credentialFilesInput: document.getElementById('credentialFilesInput'),
+  uploadCredentialFilesBtn: document.getElementById('uploadCredentialFilesBtn'),
   credentialStoreCount: document.getElementById('credentialStoreCount'),
   credentialStoreHint: document.getElementById('credentialStoreHint'),
 };
@@ -134,11 +135,30 @@ async function importCredentialFiles(files, button) {
   const fileList = Array.from(files || []).filter(Boolean);
   if (!fileList.length) return;
   const run = async () => {
+    const targetId = els.credentialTargetSelect?.value || '';
+    if (!targetId) {
+      if (els.credentialFilesInput) els.credentialFilesInput.value = '';
+      return alert('先选择目标 CPA，再上传凭证文件');
+    }
     const items = await Promise.all(fileList.map(async file => ({ name: file.name, filename: file.name, content: await file.text() })));
-    const res = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
-    const data = await res.json();
+    const importRes = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
+    const importData = await importRes.json();
+    const importedIds = (importData.saved || []).map(x => x.id).filter(Boolean);
+    if (!importedIds.length) {
+      if (els.credentialFilesInput) els.credentialFilesInput.value = '';
+      renderCredentialStore(importData.credentials || [], latestCpas);
+      return;
+    }
+    const deployRes = await fetch('/api/credentials/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId, credential_ids: importedIds }) });
+    const deployData = await deployRes.json();
+    if (deployData.cpa) replaceCpaCard(deployData.cpa);
+    renderCredentialStore(deployData.credentials || importData.credentials || [], latestCpas);
+    const okIds = new Set((deployData.results || []).filter(x => x.ok).map(x => x.id));
+    importedIds.forEach(id => {
+      if (okIds.has(id)) selectedCredentialIds.delete(id);
+      else selectedCredentialIds.add(id);
+    });
     if (els.credentialFilesInput) els.credentialFilesInput.value = '';
-    renderCredentialStore(data.credentials || [], latestCpas);
   };
   return withButtonLoading(button, '上传中...', run)();
 }
@@ -167,7 +187,8 @@ els.scanCpasBtn?.addEventListener('click', scanCpas);
 els.selectAllCredentialsBtn?.addEventListener('click', () => { const boxes = Array.from(document.querySelectorAll('#credentialStoreList input[type="checkbox"]')); const allChecked = boxes.length > 0 && boxes.every(el => el.checked); boxes.forEach(el => { const next = !allChecked; el.checked = next; const id = el.closest('.credential-item')?.dataset.credId; if (id) toggleCredentialSelect(id, next); }); });
 els.deploySelectedBtn?.addEventListener('click', deploySelectedCredentials);
 els.credentialSearchInput?.addEventListener('input', e => { credentialSearch = e.target.value || ''; renderCredentialStore(latestCredentials, latestCpas); });
-els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(e.target.files, document.querySelector('label[for="credentialFilesInput"]')));
+els.uploadCredentialFilesBtn?.addEventListener('click', () => els.credentialFilesInput?.click());
+els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(e.target.files, els.uploadCredentialFilesBtn));
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
 setInterval(() => loadServerStatus(true), 2000);
