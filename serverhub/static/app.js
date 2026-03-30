@@ -40,10 +40,38 @@ function chartLabels(history) {
   return history.map(x => (x.ts || '').slice(11, 16));
 }
 
+function renderChartFallback(canvas, message) {
+  if (!canvas) return;
+  const parent = canvas.parentElement;
+  if (!parent) return;
+  let note = parent.querySelector('.chart-fallback');
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'muted chart-fallback';
+    note.style.marginTop = '8px';
+    parent.appendChild(note);
+  }
+  note.textContent = message;
+}
+
+function clearChartFallback(canvas) {
+  const parent = canvas?.parentElement;
+  const note = parent?.querySelector('.chart-fallback');
+  if (note) note.remove();
+}
+
 function renderUsageChart(historyRaw) {
   const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
   const canvas = document.getElementById('usageChart');
-  if (!canvas || !history.length) return;
+  if (!canvas || !history.length) {
+    renderChartFallback(canvas, '暂无历史数据');
+    return;
+  }
+  if (typeof Chart === 'undefined') {
+    renderChartFallback(canvas, '图表组件加载失败，但下方数据仍可正常查看');
+    return;
+  }
+  clearChartFallback(canvas);
   const config = {
     type: 'line',
     data: {
@@ -63,7 +91,15 @@ function renderUsageChart(historyRaw) {
 function renderTrafficChart(historyRaw) {
   const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
   const canvas = document.getElementById('trafficChart');
-  if (!canvas || !history.length) return;
+  if (!canvas || !history.length) {
+    renderChartFallback(canvas, '暂无历史数据');
+    return;
+  }
+  if (typeof Chart === 'undefined') {
+    renderChartFallback(canvas, '图表组件加载失败，但下方数据仍可正常查看');
+    return;
+  }
+  clearChartFallback(canvas);
   const config = {
     type: 'line',
     data: {
@@ -190,11 +226,11 @@ async function loadAll(forceBust = false) {
   els.usageChartTitle.textContent = `CPU / 内存 / 磁盘（${rangeLabel(currentRange)}）`;
   els.trafficChartTitle.textContent = `网络上行 / 下载历史（${rangeLabel(currentRange)}）`;
   setActiveRangeBtn();
-  renderUsageChart(server.history || []);
-  renderTrafficChart(server.history || []);
   renderProcesses(server.top_processes || []);
   renderRelayStats(data.clirelay || {});
   renderCpas(data.cpas || []);
+  try { renderUsageChart(server.history || []); } catch (e) { console.error('usage chart render failed', e); }
+  try { renderTrafficChart(server.history || []); } catch (e) { console.error('traffic chart render failed', e); }
 }
 
 async function deleteCpa(id) {
