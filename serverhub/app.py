@@ -933,10 +933,9 @@ def api_deploy_credentials():
     now = now_iso()
     for row in rows:
         name = row.get('filename') or row.get('name') or f"{row['id']}.json"
-        url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files?name={urllib.parse.quote(name, safe='')}"
-        resp = requests.post(url, headers={**mgmt_headers(target['token']), 'Content-Type': 'application/json'}, data=row.get('content') or '', timeout=30)
-        ok = resp.ok
-        results.append({'id': row['id'], 'name': row['name'], 'filename': name, 'ok': ok, 'status_code': resp.status_code, 'text': resp.text[:300]})
+        result = upload_cpa_auth_file(target, name, row.get('content') or '')
+        ok = bool(result.get('ok'))
+        results.append({'id': row['id'], 'name': row['name'], 'filename': name, 'ok': ok, 'status_code': result.get('status_code'), 'text': result.get('text'), 'mode': result.get('mode')})
         if ok:
             conn.execute('UPDATE credential_store SET last_used_at = ?, last_target_id = ?, updated_at = ? WHERE id = ?', (now, target_id, now, row['id']))
     conn.commit()
