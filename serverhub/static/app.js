@@ -131,6 +131,19 @@ async function delete401(id, button) { if (!confirm('确认一键删除这个 CP
 async function deleteAuthFile(cpaId, encodedName) { if (!confirm('确认删除这个凭证吗？')) return; const res = await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); if (!res.ok) alert((data.result && data.result.text) || '删除失败'); }
 function toggleCredentialSelect(id, checked) { if (checked) selectedCredentialIds.add(id); else selectedCredentialIds.delete(id); }
 async function deleteCredential(id) { if (!confirm('确认从仓库删除这个凭证吗？')) return; const res = await fetch(`/api/credentials/${id}`, { method: 'DELETE' }); const data = await res.json(); selectedCredentialIds.delete(id); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); }
+function summarizeDeployResults(results = []) {
+  const okItems = results.filter(x => x.ok);
+  const failItems = results.filter(x => !x.ok);
+  const failText = failItems.slice(0, 3).map(x => `${x.filename || x.name}（${x.status_code || 'ERR'}）`).join('、');
+  return {
+    okItems,
+    failItems,
+    message: failItems.length
+      ? `上传完成：成功 ${okItems.length} 个，失败 ${failItems.length} 个${failText ? `
+失败项：${failText}` : ''}`
+      : `上传成功：${okItems.length} 个`,
+  };
+}
 async function importCredentialFiles(files, button) {
   const fileList = Array.from(files || []).filter(Boolean);
   if (!fileList.length) return;
@@ -143,22 +156,27 @@ async function importCredentialFiles(files, button) {
     const items = await Promise.all(fileList.map(async file => ({ name: file.name, filename: file.name, content: await file.text() })));
     const importRes = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
     const importData = await importRes.json();
+    if (!importRes.ok) {
+      if (els.credentialFilesInput) els.credentialFilesInput.value = '';
+      return alert(importData.error || '入仓失败');
+    }
     const importedIds = (importData.saved || []).map(x => x.id).filter(Boolean);
     if (!importedIds.length) {
       if (els.credentialFilesInput) els.credentialFilesInput.value = '';
       renderCredentialStore(importData.credentials || [], latestCpas);
-      return;
+      return alert('文件已读取，但没有成功入仓');
     }
     const deployRes = await fetch('/api/credentials/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId, credential_ids: importedIds }) });
     const deployData = await deployRes.json();
     if (deployData.cpa) replaceCpaCard(deployData.cpa);
     renderCredentialStore(deployData.credentials || importData.credentials || [], latestCpas);
-    const okIds = new Set((deployData.results || []).filter(x => x.ok).map(x => x.id));
+    const summary = summarizeDeployResults(deployData.results || []);
     importedIds.forEach(id => {
-      if (okIds.has(id)) selectedCredentialIds.delete(id);
+      if (summary.okItems.some(x => x.id === id)) selectedCredentialIds.delete(id);
       else selectedCredentialIds.add(id);
     });
     if (els.credentialFilesInput) els.credentialFilesInput.value = '';
+    alert(summary.message);
   };
   return withButtonLoading(button, '上传中...', run)();
 }
@@ -171,9 +189,10 @@ async function deploySelectedCredentials() {
     const data = await res.json();
     if (data.cpa) replaceCpaCard(data.cpa);
     renderCredentialStore(data.credentials || [], latestCpas);
-    const failItems = (data.results || []).filter(x => !x.ok);
-    failItems.forEach(x => selectedCredentialIds.add(x.id));
-    (data.results || []).filter(x => x.ok).forEach(x => selectedCredentialIds.delete(x.id));
+    const summary = summarizeDeployResults(data.results || []);
+    summary.failItems.forEach(x => selectedCredentialIds.add(x.id));
+    summary.okItems.forEach(x => selectedCredentialIds.delete(x.id));
+    alert(summary.message);
   };
   return withButtonLoading(els.deploySelectedBtn, '上传中...', run)();
 }
