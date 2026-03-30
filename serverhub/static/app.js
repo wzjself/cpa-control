@@ -174,7 +174,7 @@ function renderUsageChart(historyRaw) {
   ], { labels: chartLabels(history), minY: 0, maxY: 100, beginAtZero: true, height: 240 });
 }
 
-function seriesRatePerMinute(history, key) {
+function seriesRatePerSecond(history, key) {
   if (!Array.isArray(history) || history.length < 2) return [];
   const out = [];
   for (let i = 1; i < history.length; i++) {
@@ -189,8 +189,8 @@ function seriesRatePerMinute(history, key) {
       continue;
     }
     const diffMb = Math.max(0, curVal - prevVal);
-    const minutes = (curTs - prevTs) / 60000;
-    out.push(minutes > 0 ? diffMb / minutes : 0);
+    const seconds = (curTs - prevTs) / 1000;
+    out.push(seconds > 0 ? (diffMb * 1024) / seconds : 0);
   }
   return out;
 }
@@ -204,15 +204,15 @@ function renderTrafficChart(historyRaw) {
   }
   clearChartFallback(canvas);
   destroyCanvasChart(canvas);
-  const rx = seriesRatePerMinute(history, 'net_rx_mb');
-  const tx = seriesRatePerMinute(history, 'net_tx_mb');
+  const rx = seriesRatePerSecond(history, 'net_rx_mb');
+  const tx = seriesRatePerSecond(history, 'net_tx_mb');
   const labels = chartLabels(history).slice(1);
   const allVals = rx.concat(tx);
   drawSimpleLineChart(canvas, [
     { label: '下载速率', data: rx, color: '#22c55e' },
     { label: '上传速率', data: tx, color: '#f472b6' },
   ], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240 });
-  renderChartFallback(canvas, '单位：网络速率（MB/min，低于 1 MB/min 的刻度按小数显示）');
+  renderChartFallback(canvas, '单位：网络速率（KB/s）');
 }
 
 function renderProcesses(items) {
@@ -285,20 +285,20 @@ function renderCpaCard(cpa) {
         <div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div>
       </div>
       <div class="quota-row">
-        <div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? `已知额度 ${knownQuotaAccounts} 个 · 未知 ${unknownQuotaAccounts} 个` : `已用 ${fmtMaybePct(cpa.used_ratio)} / 剩余 ${fmtMaybePct(cpa.remaining_ratio)} · 未知 ${unknownQuotaAccounts} 个`}</span></div>
-        <div class="progress used"><span style="width:${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? 0 : (cpa.used_ratio ?? 0)}%"></span></div>
+        <div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? `已知额度 ${knownQuotaAccounts} 个 · 未知 ${unknownQuotaAccounts} 个` : `剩余 ${fmtMaybePct(cpa.remaining_ratio)} / 已用 ${fmtMaybePct(cpa.used_ratio)} · 未知 ${unknownQuotaAccounts} 个`}</span></div>
+        <div class="progress remain"><span style="width:${cpa.remaining_ratio ?? 0}%"></span></div>
       </div>
       <div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）</div>
-      <div class="list">
+      <div class="account-grid compact-account-grid">
         ${(cpa.accounts || []).map(acc => `
-          <div class="account-row">
-            <div class="account-top">
-              <strong>${esc(acc.email || acc.name)}</strong>
+          <div class="account-chip">
+            <div class="account-chip-top">
+              <strong title="${esc(acc.email || acc.name)}">${esc(acc.email || acc.name)}</strong>
               <span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span>
             </div>
-            <div class="progress"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
-            <div class="muted">剩余额度：${fmtMaybePct(acc.remaining_ratio)}${acc.quota_checked_at ? ` · 更新于 ${fmtTime(acc.quota_checked_at)}` : ''}${acc.status_message ? ` · ${esc(acc.status_message)}` : ''}</div>
-            <div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除凭证</button></div>
+            <div class="muted">剩余 ${fmtMaybePct(acc.remaining_ratio)}</div>
+            <div class="muted">${acc.quota_checked_at ? `更新 ${fmtTime(acc.quota_checked_at)}` : '未取到时间'}</div>
+            <div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除</button></div>
           </div>
         `).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>'}
       </div>
