@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebNote</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div>
+          <h1>WebNote</h1>
+          <p>Multi-tab notes + files</p>
+        </div>
+        <button class="mobile-toggle" id="mobileToggle">☰</button>
+      </div>
+      <div class="sidebar-actions">
+        <button id="newTabBtn">+ New tab</button>
+      </div>
+      <div class="tab-list" id="tabList"></div>
+      <div class="upload-panel">
+        <h3>Document upload</h3>
+        <label class="upload-button">
+          <input type="file" id="docInput" multiple />
+          <span>Upload files</span>
+        </label>
+        <p class="hint">Files are stored on the server in a dedicated project folder.</p>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <input id="titleInput" class="title-input" placeholder="Page title" />
+        <div class="status-wrap">
+          <span id="saveStatus" class="save-status">Ready</span>
+          <button id="deleteTabBtn" class="ghost danger">Delete tab</button>
+        </div>
+      </header>
+
+      <section class="editor-wrap">
+        <div id="editor" class="editor" contenteditable="true" spellcheck="true"></div>
+      </section>
+
+      <section class="uploads-wrap">
+        <div class="section-title-row">
+          <h3>Uploaded files</h3>
+          <span class="hint">Paste images directly into the note editor 📎</span>
+        </div>
+        <div id="uploadsList" class="uploads-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <template id="tabItemTemplate">
+    <button class="tab-item" draggable="true">
+      <span class="tab-title"></span>
+      <span class="tab-meta">↕</span>
+    </button>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

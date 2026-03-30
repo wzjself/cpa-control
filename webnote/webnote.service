@@ -1,0 +1,15 @@
+[Unit]
+Description=WebNote Flask App
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/workspace/webnote
+ExecStart=/root/.openclaw/workspace/webnote/.venv/bin/python /root/.openclaw/workspace/webnote/app.py
+Restart=always
+RestartSec=3
+Environment=WEBNOTE_HOST=0.0.0.0
+Environment=WEBNOTE_PORT=8320
+
+[Install]
+WantedBy=multi-user.target
