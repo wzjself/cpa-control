@@ -83,11 +83,13 @@ button.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.35); }
 }
 .tab-meta { color: var(--muted); font-size: 12px; }
 .upload-panel {
-  margin-top: auto;
   background: rgba(15, 23, 42, 0.75);
   border: 1px solid var(--line);
   border-radius: 18px;
   padding: 14px;
+}
+.bottom-upload-panel {
+  margin-top: 0;
 }
 .upload-panel h3, .uploads-wrap h3 { margin: 0 0 10px; }
 .upload-button {
@@ -115,6 +117,10 @@ button.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.35); }
   border: 1px solid var(--line);
   border-radius: 20px;
   box-shadow: var(--shadow);
+}
+.bottom-panels {
+  display: grid;
+  gap: 14px;
 }
 .topbar {
   display: flex;
@@ -154,7 +160,7 @@ button.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.35); }
   margin: 10px 0;
 }
 .editor:empty:before {
-  content: 'Write here... Paste screenshots or images directly into the editor.';
+  content: '在这里写内容……也可以直接把截图或图片粘贴进来。';
   color: #6b7b95;
 }
 .uploads-wrap { padding: 16px; }
@@ -186,17 +192,22 @@ button.danger { color: #fecaca; border-color: rgba(248, 113, 113, 0.35); }
 @media (max-width: 900px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    width: min(86vw, 320px);
-    z-index: 30;
-    transform: translateX(-100%);
-    transition: transform .2s ease;
+    position: static;
+    inset: auto;
+    width: 100%;
+    z-index: auto;
+    transform: none;
+    transition: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 12px;
   }
-  .sidebar.open { transform: translateX(0); }
-  .mobile-toggle { display: inline-flex; }
+  .sidebar.open { transform: none; }
+  .mobile-toggle { display: none; }
   .main-panel { padding: 12px; }
   .topbar { flex-direction: column; align-items: stretch; }
   .status-wrap { justify-content: space-between; }
   .section-title-row { flex-direction: column; align-items: flex-start; }
+  .editor { min-height: 38vh; }
+  .bottom-panels { grid-template-columns: 1fr; }
 }
