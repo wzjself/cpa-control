@@ -88,6 +88,19 @@ def init_db() -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS credential_store (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            content TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '',
+            uploaded_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_used_at TEXT,
+            last_target_id TEXT,
+            archived INTEGER NOT NULL DEFAULT 0
+        );
         """
     )
     conn.commit()
@@ -353,6 +366,13 @@ def get_clirelay_summary() -> dict[str, Any]:
 def load_cpas() -> list[dict[str, Any]]:
     conn = get_conn()
     rows = [dict(r) for r in conn.execute("SELECT * FROM cpa_targets ORDER BY created_at DESC").fetchall()]
+    conn.close()
+    return rows
+
+
+def list_credentials() -> list[dict[str, Any]]:
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
     conn.close()
     return rows
 
@@ -835,6 +855,85 @@ def api_scan_cpas():
         result = scan_cpa(target)
         results.append({'id': target['id'], 'name': target['name'], **result})
     return jsonify({'results': results, 'cpas': [cpa_summary(t) for t in load_cpas()]})
+
+
+
+@app.get('/api/credentials')
+def api_list_credentials():
+    return jsonify({'credentials': list_credentials(), 'cpas': load_cpas()})
+
+
+@app.post('/api/credentials/import')
+def api_import_credentials():
+    data = request.get_json(force=True) or {}
+    items = data.get('items') or []
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': '没有可导入的凭证'}), 400
+    conn = get_conn()
+    saved = []
+    now = now_iso()
+    for item in items:
+        content = str(item.get('content') or '').strip()
+        if not content:
+            continue
+        cred_id = uuid.uuid4().hex[:16]
+        filename = str(item.get('filename') or item.get('name') or f'{cred_id}.json').strip()
+        name = str(item.get('name') or filename).strip()
+        row = {
+            'id': cred_id,
+            'name': name,
+            'filename': filename,
+            'content': content,
+            'note': str(item.get('note') or ''),
+            'tags': str(item.get('tags') or ''),
+            'uploaded_at': now,
+            'updated_at': now,
+            'last_used_at': None,
+            'last_target_id': None,
+            'archived': 0,
+        }
+        conn.execute('INSERT INTO credential_store (id,name,filename,content,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,archived) VALUES (:id,:name,:filename,:content,:note,:tags,:uploaded_at,:updated_at,:last_used_at,:last_target_id,:archived)', row)
+        saved.append({'id': cred_id, 'name': name, 'filename': filename})
+    conn.commit()
+    conn.close()
+    return jsonify({'saved': saved, 'credentials': list_credentials()})
+
+
+@app.delete('/api/credentials/<cred_id>')
+def api_delete_credential(cred_id: str):
+    conn = get_conn()
+    conn.execute('UPDATE credential_store SET archived = 1, updated_at = ? WHERE id = ?', (now_iso(), cred_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'credentials': list_credentials()})
+
+
+@app.post('/api/credentials/deploy')
+def api_deploy_credentials():
+    data = request.get_json(force=True) or {}
+    target_id = str(data.get('target_id') or '').strip()
+    credential_ids = data.get('credential_ids') or []
+    target = next((x for x in load_cpas() if x['id'] == target_id), None)
+    if not target:
+        return jsonify({'error': '目标 CPA 不存在'}), 404
+    if not credential_ids:
+        return jsonify({'error': '没有选择凭证'}), 400
+    conn = get_conn()
+    qmarks = ','.join('?' for _ in credential_ids)
+    rows = [dict(r) for r in conn.execute(f'SELECT * FROM credential_store WHERE archived = 0 AND id IN ({qmarks})', tuple(credential_ids)).fetchall()]
+    results = []
+    now = now_iso()
+    for row in rows:
+        name = row.get('filename') or row.get('name') or f"{row['id']}.json"
+        url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files?name={urllib.parse.quote(name, safe='')}"
+        resp = requests.put(url, headers={**mgmt_headers(target['token']), 'Content-Type': 'application/json'}, data=row.get('content') or '', timeout=30)
+        ok = resp.ok
+        results.append({'id': row['id'], 'name': row['name'], 'filename': name, 'ok': ok, 'status_code': resp.status_code, 'text': resp.text[:300]})
+        if ok:
+            conn.execute('UPDATE credential_store SET last_used_at = ?, last_target_id = ?, updated_at = ? WHERE id = ?', (now, target_id, now, row['id']))
+    conn.commit()
+    conn.close()
+    return jsonify({'results': results, 'credentials': list_credentials(), 'cpa': cpa_summary(target)})
 
 
 @app.get('/api/cpas/<cpa_id>')

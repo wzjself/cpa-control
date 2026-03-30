@@ -1,102 +1,8 @@
 let usageChart, trafficChart;
 let currentRange = '24h';
-
-function destroyCanvasChart(canvas) {
-  if (!canvas) return;
-  const ctx = canvas.getContext && canvas.getContext('2d');
-  if (ctx) ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
-}
-
-function drawSimpleLineChart(canvas, datasets, opts = {}) {
-  if (!canvas) return;
-  const dpr = Math.max(1, window.devicePixelRatio || 1);
-  const cssWidth = Math.max(320, canvas.clientWidth || canvas.parentElement?.clientWidth || 600);
-  const cssHeight = Math.max(220, opts.height || 240);
-  canvas.width = Math.floor(cssWidth * dpr);
-  canvas.height = Math.floor(cssHeight * dpr);
-  canvas.style.width = `${cssWidth}px`;
-  canvas.style.height = `${cssHeight}px`;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
-
-  const pad = { top: 12, right: 10, bottom: 24, left: 34 };
-  const w = cssWidth - pad.left - pad.right;
-  const h = cssHeight - pad.top - pad.bottom;
-  if (w <= 10 || h <= 10) return;
-
-  const values = datasets.flatMap(ds => ds.data || []).filter(v => Number.isFinite(v));
-  if (!values.length) return;
-  let minY = Number.isFinite(opts.minY) ? opts.minY : Math.min(...values);
-  let maxY = Number.isFinite(opts.maxY) ? opts.maxY : Math.max(...values);
-  if (minY === maxY) {
-    minY = minY - 1;
-    maxY = maxY + 1;
-  }
-  if (opts.beginAtZero) minY = Math.min(0, minY);
-
-  ctx.strokeStyle = 'rgba(158,177,206,0.18)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = pad.top + (h * i / 4);
-    ctx.beginPath();
-    ctx.moveTo(pad.left, y);
-    ctx.lineTo(pad.left + w, y);
-    ctx.stroke();
-  }
-
-  ctx.strokeStyle = 'rgba(158,177,206,0.35)';
-  ctx.beginPath();
-  ctx.moveTo(pad.left, pad.top);
-  ctx.lineTo(pad.left, pad.top + h);
-  ctx.lineTo(pad.left + w, pad.top + h);
-  ctx.stroke();
-
-  const toX = (idx, total) => pad.left + (total <= 1 ? 0 : (w * idx / (total - 1)));
-  const toY = val => pad.top + h - ((val - minY) / (maxY - minY)) * h;
-
-  datasets.forEach(ds => {
-    const data = ds.data || [];
-    ctx.strokeStyle = ds.color || '#60a5fa';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    data.forEach((v, i) => {
-      const x = toX(i, data.length);
-      const y = toY(Number(v) || 0);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-  });
-
-  ctx.fillStyle = '#9eb1ce';
-  ctx.font = '12px Inter, system-ui, sans-serif';
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  for (let i = 0; i <= 4; i++) {
-    const v = maxY - ((maxY - minY) * i / 4);
-    const y = pad.top + (h * i / 4);
-    ctx.fillText(opts.yFormatter ? opts.yFormatter(v) : `${Math.round(v)}`, pad.left - 6, y);
-  }
-
-  const labels = opts.labels || [];
-  const tickCount = Math.min(6, labels.length);
-  if (tickCount > 0) {
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    for (let i = 0; i < tickCount; i++) {
-      const idx = Math.round((labels.length - 1) * (tickCount === 1 ? 0 : i / (tickCount - 1)));
-      ctx.fillText(String(labels[idx] || ''), toX(idx, labels.length), pad.top + h + 6);
-    }
-  }
-}
+const selectedCredentialIds = new Set();
 
 const els = {
-  refreshAllBtn: document.getElementById('refreshAllBtn'),
-  scanCpasBtn: document.getElementById('scanCpasBtn'),
-  cpaForm: document.getElementById('cpaForm'),
   healthScore: document.getElementById('healthScore'),
   cpuNow: document.getElementById('cpuNow'),
   memNow: document.getElementById('memNow'),
@@ -105,8 +11,19 @@ const els = {
   processList: document.getElementById('processList'),
   relayStats: document.getElementById('relayStats'),
   cpaList: document.getElementById('cpaList'),
+  cpaForm: document.getElementById('cpaForm'),
+  refreshAllBtn: document.getElementById('refreshAllBtn'),
+  scanCpasBtn: document.getElementById('scanCpasBtn'),
   usageChartTitle: document.getElementById('usageChartTitle'),
   trafficChartTitle: document.getElementById('trafficChartTitle'),
+  timeRangeSwitch: document.getElementById('timeRangeSwitch'),
+  credentialStoreList: document.getElementById('credentialStoreList'),
+  credentialBulkInput: document.getElementById('credentialBulkInput'),
+  credentialNamePrefix: document.getElementById('credentialNamePrefix'),
+  importCredentialsBtn: document.getElementById('importCredentialsBtn'),
+  selectAllCredentialsBtn: document.getElementById('selectAllCredentialsBtn'),
+  deploySelectedBtn: document.getElementById('deploySelectedBtn'),
+  credentialTargetSelect: document.getElementById('credentialTargetSelect'),
 };
 
 const fmtPct = n => `${Number(n ?? 0).toFixed(1)}%`;
@@ -122,131 +39,6 @@ const fmtTime = s => {
   return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
 };
 
-function downsample(history, maxPoints = 120) {
-  if (!Array.isArray(history) || history.length <= maxPoints) return history || [];
-  const step = Math.ceil(history.length / maxPoints);
-  const result = [];
-  for (let i = 0; i < history.length; i += step) result.push(history[i]);
-  if (result[result.length - 1] !== history[history.length - 1]) result.push(history[history.length - 1]);
-  return result;
-}
-
-function chartLabels(history) {
-  if (currentRange === 'all' || currentRange === '30d' || currentRange === '7d') {
-    return history.map(x => (x.ts || '').slice(5, 16).replace('T', ' '));
-  }
-  return history.map(x => (x.ts || '').slice(11, 16));
-}
-
-function renderChartFallback(canvas, message) {
-  if (!canvas) return;
-  const parent = canvas.parentElement;
-  if (!parent) return;
-  let note = parent.querySelector('.chart-fallback');
-  if (!note) {
-    note = document.createElement('div');
-    note.className = 'muted chart-fallback';
-    note.style.marginTop = '8px';
-    parent.appendChild(note);
-  }
-  note.textContent = message;
-}
-
-function clearChartFallback(canvas) {
-  const parent = canvas?.parentElement;
-  const note = parent?.querySelector('.chart-fallback');
-  if (note) note.remove();
-}
-
-function renderUsageChart(historyRaw) {
-  const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
-  const canvas = document.getElementById('usageChart');
-  if (!canvas || !history.length) {
-    renderChartFallback(canvas, '暂无历史数据');
-    return;
-  }
-  clearChartFallback(canvas);
-  destroyCanvasChart(canvas);
-  drawSimpleLineChart(canvas, [
-    { label: 'CPU', data: history.map(x => Number(x.cpu_percent) || 0), color: '#60a5fa' },
-    { label: '内存', data: history.map(x => Number(x.mem_percent) || 0), color: '#34d399' },
-    { label: '磁盘', data: history.map(x => Number(x.disk_percent) || 0), color: '#f59e0b' },
-  ], { labels: chartLabels(history), minY: 0, maxY: 100, beginAtZero: true, height: 240 });
-}
-
-function seriesRatePerSecond(history, key) {
-  if (!Array.isArray(history) || history.length < 2) return [];
-  const out = [];
-  for (let i = 1; i < history.length; i++) {
-    const prev = history[i - 1];
-    const cur = history[i];
-    const prevVal = Number(prev?.[key]);
-    const curVal = Number(cur?.[key]);
-    const prevTs = new Date(prev?.ts || 0).getTime();
-    const curTs = new Date(cur?.ts || 0).getTime();
-    if (!Number.isFinite(prevVal) || !Number.isFinite(curVal) || !prevTs || !curTs || curTs <= prevTs) {
-      out.push(0);
-      continue;
-    }
-    const diffMb = Math.max(0, curVal - prevVal);
-    const seconds = (curTs - prevTs) / 1000;
-    out.push(seconds > 0 ? (diffMb * 1024) / seconds : 0);
-  }
-  return out;
-}
-
-function renderTrafficChart(historyRaw) {
-  const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
-  const canvas = document.getElementById('trafficChart');
-  if (!canvas || history.length < 2) {
-    renderChartFallback(canvas, '暂无历史速率数据');
-    return;
-  }
-  clearChartFallback(canvas);
-  destroyCanvasChart(canvas);
-  const rx = seriesRatePerSecond(history, 'net_rx_mb');
-  const tx = seriesRatePerSecond(history, 'net_tx_mb');
-  const labels = chartLabels(history).slice(1);
-  const allVals = rx.concat(tx);
-  drawSimpleLineChart(canvas, [
-    { label: '下载速率', data: rx, color: '#22c55e' },
-    { label: '上传速率', data: tx, color: '#f472b6' },
-  ], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240 });
-  renderChartFallback(canvas, '单位：网络速率（KB/s）');
-}
-
-function renderProcesses(items) {
-  els.processList.innerHTML = items.map(p => `
-    <div class="process-item">
-      <div><strong>${p.name}</strong> <span class="muted">PID ${p.pid}</span></div>
-      <div class="muted">CPU ${p.cpu}% · 内存 ${p.mem}%</div>
-    </div>
-  `).join('');
-}
-
-function renderRelayStats(data) {
-  if (!data.available) {
-    els.relayStats.innerHTML = '<div class="relay-item">未找到 clirelay 数据源</div>';
-    return;
-  }
-  const source = data.source === 'management-api' ? '管理接口' : 'usage.db';
-  const system = data.system || {};
-  const counts = data.counts || {};
-  const topKeys = data.top_api_keys || [];
-  els.relayStats.innerHTML = `
-    <div class="relay-item">数据来源：<strong>${source}</strong></div>
-    <div class="relay-item">总请求：<strong>${fmtNum(data.request_count)}</strong></div>
-    <div class="relay-item">成功率：<strong>${data.success_rate}%</strong></div>
-    <div class="relay-item">当前 RPM / TPM：<strong>${fmtNum(data.rpm)} / ${fmtNum(data.tpm)}</strong></div>
-    <div class="relay-item">已使用 Token：<strong>${fmtNum(data.total_tokens)}</strong></div>
-    <div class="relay-item">输入 / 输出 / 缓存：<strong>${fmtNum(data.input_tokens)} / ${fmtNum(data.output_tokens)} / ${fmtNum(data.cached_tokens)}</strong></div>
-    <div class="relay-item">认证文件 / 提供商：<strong>${fmtNum(counts.auth_files || 0)} / ${fmtNum(counts.providers_total || 0)}</strong></div>
-    <div class="relay-item">clirelay 进程 CPU / 内存：<strong>${Number(system.process_cpu_pct || 0).toFixed(1)}% / ${Number(system.process_mem_pct || 0).toFixed(1)}%</strong></div>
-  ` + topKeys.map(x => `
-    <div class="relay-item"><strong>${x.name || x.api_key_name || '未命名'}</strong><div class="muted">请求 ${fmtNum(x.requests)} · Token ${fmtNum(x.tokens || x.total_tokens)}</div></div>
-  `).join('');
-}
-
 function accountStatusText(acc) {
   if (acc.invalid_401) return '401失效';
   if (acc.quota_limited) return '额度耗尽';
@@ -261,11 +53,176 @@ function accountStatusClass(acc) {
   if (acc.quota_limited) return 'warn';
   return 'ok';
 }
-
+function setActiveRangeBtn() {
+  document.querySelectorAll('.range-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.range === currentRange));
+}
+function downsample(arr, maxPoints = 120) {
+  if (!Array.isArray(arr) || arr.length <= maxPoints) return arr || [];
+  const step = Math.ceil(arr.length / maxPoints);
+  return arr.filter((_, i) => i % step === 0 || i === arr.length - 1);
+}
+function chartLabels(history) {
+  return history.map(item => {
+    const d = new Date(item.ts);
+    if (currentRange === '7d' || currentRange === '30d' || currentRange === 'all') {
+      return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  });
+}
+function destroyCanvasChart(canvas) {
+  if (!canvas) return;
+  const ctx = canvas.getContext && canvas.getContext('2d');
+  if (ctx) ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+}
+function drawSimpleLineChart(canvas, datasets, opts = {}) {
+  if (!canvas) return;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssWidth = Math.max(320, canvas.clientWidth || canvas.parentElement?.clientWidth || 600);
+  const cssHeight = Math.max(220, opts.height || 240);
+  canvas.width = Math.floor(cssWidth * dpr);
+  canvas.height = Math.floor(cssHeight * dpr);
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  const pad = { top: 12, right: 10, bottom: 24, left: 34 };
+  const w = cssWidth - pad.left - pad.right;
+  const h = cssHeight - pad.top - pad.bottom;
+  if (w <= 10 || h <= 10) return;
+  const values = datasets.flatMap(ds => ds.data || []).filter(v => Number.isFinite(v));
+  if (!values.length) return;
+  let minY = Number.isFinite(opts.minY) ? opts.minY : Math.min(...values);
+  let maxY = Number.isFinite(opts.maxY) ? opts.maxY : Math.max(...values);
+  if (minY === maxY) { minY -= 1; maxY += 1; }
+  if (opts.beginAtZero) minY = Math.min(0, minY);
+  ctx.strokeStyle = 'rgba(158,177,206,0.18)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (h * i / 4);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + w, y); ctx.stroke();
+  }
+  ctx.strokeStyle = 'rgba(158,177,206,0.35)';
+  ctx.beginPath(); ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, pad.top + h); ctx.lineTo(pad.left + w, pad.top + h); ctx.stroke();
+  const toX = (idx, total) => pad.left + (total <= 1 ? 0 : (w * idx / (total - 1)));
+  const toY = val => pad.top + h - ((val - minY) / (maxY - minY)) * h;
+  datasets.forEach(ds => {
+    const data = ds.data || [];
+    ctx.strokeStyle = ds.color || '#60a5fa';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = toX(i, data.length); const y = toY(Number(v) || 0);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+  ctx.fillStyle = '#9eb1ce';
+  ctx.font = '12px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const v = maxY - ((maxY - minY) * i / 4);
+    const y = pad.top + (h * i / 4);
+    ctx.fillText(`${Math.round(v * 10) / 10}`, pad.left - 6, y);
+  }
+  const labels = opts.labels || [];
+  const tickCount = Math.min(6, labels.length);
+  if (tickCount > 0) {
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let i = 0; i < tickCount; i++) {
+      const idx = Math.round((labels.length - 1) * (tickCount === 1 ? 0 : i / (tickCount - 1)));
+      ctx.fillText(String(labels[idx] || ''), toX(idx, labels.length), pad.top + h + 6);
+    }
+  }
+}
+function renderChartFallback(canvas, message) {
+  if (!canvas) return;
+  const parent = canvas.parentElement; if (!parent) return;
+  let note = parent.querySelector('.chart-fallback');
+  if (!note) {
+    note = document.createElement('div'); note.className = 'muted chart-fallback'; note.style.marginTop = '8px'; parent.appendChild(note);
+  }
+  note.textContent = message;
+}
+function clearChartFallback(canvas) {
+  const parent = canvas?.parentElement;
+  const note = parent?.querySelector('.chart-fallback');
+  if (note) note.remove();
+}
+function renderUsageChart(historyRaw) {
+  const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
+  const canvas = document.getElementById('usageChart');
+  if (!canvas || !history.length) { renderChartFallback(canvas, '暂无历史数据'); return; }
+  clearChartFallback(canvas); destroyCanvasChart(canvas);
+  drawSimpleLineChart(canvas, [
+    { label: 'CPU', data: history.map(x => Number(x.cpu_percent) || 0), color: '#60a5fa' },
+    { label: '内存', data: history.map(x => Number(x.mem_percent) || 0), color: '#34d399' },
+    { label: '磁盘', data: history.map(x => Number(x.disk_percent) || 0), color: '#f59e0b' },
+  ], { labels: chartLabels(history), minY: 0, maxY: 100, beginAtZero: true, height: 240 });
+}
+function seriesRatePerSecond(history, key) {
+  if (!Array.isArray(history) || history.length < 2) return [];
+  const out = [];
+  for (let i = 1; i < history.length; i++) {
+    const prev = history[i - 1], cur = history[i];
+    const prevVal = Number(prev?.[key]), curVal = Number(cur?.[key]);
+    const prevTs = new Date(prev?.ts || 0).getTime(), curTs = new Date(cur?.ts || 0).getTime();
+    if (!Number.isFinite(prevVal) || !Number.isFinite(curVal) || !prevTs || !curTs || curTs <= prevTs) { out.push(0); continue; }
+    const diffMb = Math.max(0, curVal - prevVal); const seconds = (curTs - prevTs) / 1000;
+    out.push(seconds > 0 ? (diffMb * 1024) / seconds : 0);
+  }
+  return out;
+}
+function renderTrafficChart(historyRaw) {
+  const history = downsample(historyRaw, currentRange === '3h' ? 90 : currentRange === '24h' ? 120 : 160);
+  const canvas = document.getElementById('trafficChart');
+  if (!canvas || history.length < 2) { renderChartFallback(canvas, '暂无历史速率数据'); return; }
+  clearChartFallback(canvas); destroyCanvasChart(canvas);
+  const rx = seriesRatePerSecond(history, 'net_rx_mb');
+  const tx = seriesRatePerSecond(history, 'net_tx_mb');
+  const labels = chartLabels(history).slice(1);
+  const allVals = rx.concat(tx);
+  drawSimpleLineChart(canvas, [
+    { label: '下载速率', data: rx, color: '#22c55e' },
+    { label: '上传速率', data: tx, color: '#f472b6' },
+  ], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240 });
+  renderChartFallback(canvas, '单位：网络速率（KB/s）');
+}
+function renderProcesses(processes) {
+  els.processList.innerHTML = (processes || []).map(p => `<div class="process-item"><strong>${esc(p.name)}</strong><div class="muted">CPU ${fmtPct(p.cpu_percent)} · 内存 ${fmtNum(p.memory_mb)} MB · PID ${p.pid}</div></div>`).join('') || '<div class="muted">暂无数据</div>';
+}
+function renderRelayStats(data) {
+  if (!data || !data.available) { els.relayStats.innerHTML = '<div class="muted">clirelay 暂无可用数据</div>'; return; }
+  const items = [
+    ['今日请求', fmtNum(data.requests_today)], ['今日 Token', fmtNum(data.tokens_today)], ['RPM 峰值', fmtNum(data.rpm_peak)], ['TPM 峰值', fmtNum(data.tpm_peak)], ['近 24h Key 数', fmtNum(data.keys_24h)], ['近 24h 模型数', fmtNum(data.models_24h)],
+  ];
+  els.relayStats.innerHTML = items.map(([k,v]) => `<div class="relay-item"><strong>${k}</strong><div class="muted">${v}</div></div>`).join('');
+}
+function renderCredentialStore(credentials = [], cpas = []) {
+  if (els.credentialTargetSelect) {
+    const prev = els.credentialTargetSelect.value;
+    els.credentialTargetSelect.innerHTML = '<option value="">选择目标 CPA</option>' + (cpas || []).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+    if ([...els.credentialTargetSelect.options].some(o => o.value === prev)) els.credentialTargetSelect.value = prev;
+  }
+  els.credentialStoreList.innerHTML = (credentials || []).map(item => `
+    <label class="credential-item" data-cred-id="${item.id}">
+      <div class="credential-item-top">
+        <input type="checkbox" ${selectedCredentialIds.has(item.id) ? 'checked' : ''} onchange="toggleCredentialSelect('${item.id}', this.checked)">
+        <strong title="${esc(item.filename)}">${esc(item.name)}</strong>
+      </div>
+      <div class="muted">${esc(item.filename)}</div>
+      <div class="muted">上传 ${fmtTime(item.uploaded_at)}${item.last_used_at ? ` · 最近投放 ${fmtTime(item.last_used_at)}` : ''}</div>
+      <div class="credential-actions"><button type="button" class="danger small-btn" onclick="deleteCredential('${item.id}')">删除</button></div>
+    </label>
+  `).join('') || '<div class="muted">仓库里还没有凭证，先粘贴导入。</div>';
+}
 function renderCpaCard(cpa) {
-    const knownQuotaAccounts = (cpa.accounts || []).filter(acc => acc.remaining_ratio !== null && acc.remaining_ratio !== undefined).length;
-    const unknownQuotaAccounts = Math.max(0, (cpa.total || 0) - knownQuotaAccounts);
-    return `
+  const knownQuotaAccounts = (cpa.accounts || []).filter(acc => acc.remaining_ratio !== null && acc.remaining_ratio !== undefined).length;
+  const unknownQuotaAccounts = Math.max(0, (cpa.total || 0) - knownQuotaAccounts);
+  return `
     <div class="cpa-card" data-cpa-id="${cpa.id}">
       <div class="cpa-head">
         <div>
@@ -306,24 +263,12 @@ function renderCpaCard(cpa) {
     </div>
   `;
 }
-
 function replaceCpaCard(cpa) {
   const old = els.cpaList.querySelector(`[data-cpa-id="${cpa.id}"]`);
   const html = renderCpaCard(cpa);
-  if (old) old.outerHTML = html;
-  else els.cpaList.insertAdjacentHTML('afterbegin', html);
+  if (old) old.outerHTML = html; else els.cpaList.insertAdjacentHTML('afterbegin', html);
 }
-
-function renderCpas(cpas) {
-  els.cpaList.innerHTML = cpas.map(renderCpaCard).join('');
-}
-
-function setActiveRangeBtn() {
-  document.querySelectorAll('.range-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.range === currentRange);
-  });
-}
-
+function renderCpas(cpas) { els.cpaList.innerHTML = cpas.map(renderCpaCard).join(''); }
 function renderServer(server) {
   els.healthScore.textContent = server.health;
   els.cpuNow.textContent = fmtPct(server.latest.cpu_percent);
@@ -337,91 +282,65 @@ function renderServer(server) {
   try { renderUsageChart(server.history || []); } catch (e) { console.error('usage chart render failed', e); }
   try { renderTrafficChart(server.history || []); } catch (e) { console.error('traffic chart render failed', e); }
 }
-
 async function loadServerStatus(forceBust = false) {
   const url = `/api/server-status?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`;
   const res = await fetch(url, { cache: 'no-store' });
-  const data = await res.json();
-  renderServer(data.server);
+  const data = await res.json(); renderServer(data.server);
 }
-
+async function loadCredentials() {
+  const res = await fetch('/api/credentials', { cache: 'no-store' });
+  const data = await res.json();
+  renderCredentialStore(data.credentials || [], data.cpas || []);
+}
 async function loadAll(forceBust = false) {
   const url = `/api/overview?range=${encodeURIComponent(currentRange)}${forceBust ? `&_t=${Date.now()}` : ''}`;
   const res = await fetch(url, { cache: 'no-store' });
   const data = await res.json();
-  renderServer(data.server);
-  renderRelayStats(data.clirelay || {});
-  renderCpas(data.cpas || []);
+  renderServer(data.server); renderRelayStats(data.clirelay || {}); renderCpas(data.cpas || []); renderCredentialStore((await (await fetch('/api/credentials', { cache: 'no-store' })).json()).credentials || [], data.cpas || []);
 }
-
-async function deleteCpa(id) {
-  if (!confirm('确认删除这个 CPA 吗？')) return;
-  await fetch(`/api/cpas/${id}`, {method:'DELETE'});
-  const card = els.cpaList.querySelector(`[data-cpa-id="${id}"]`);
-  if (card) card.remove();
+async function deleteCpa(id) { if (!confirm('确认删除这个 CPA 吗？')) return; await fetch(`/api/cpas/${id}`, {method:'DELETE'}); const card = els.cpaList.querySelector(`[data-cpa-id="${id}"]`); if (card) card.remove(); loadCredentials(); }
+async function refreshCpa(id) { const res = await fetch(`/api/cpas/${id}/refresh`, {method:'POST'}); const data = await res.json(); if (!res.ok) { alert(data.error || '刷新失败'); if (data.cpa) replaceCpaCard(data.cpa); return; } replaceCpaCard(data.cpa); }
+async function delete401(id) { if (!confirm('确认一键删除这个 CPA 里的 401 凭证吗？')) return; const res = await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); if (!res.ok) alert('删除401时有失败项'); }
+async function deleteAuthFile(cpaId, encodedName) { if (!confirm('确认删除这个凭证吗？')) return; const res = await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'}); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); if (!res.ok) alert((data.result && data.result.text) || '删除失败'); }
+function toggleCredentialSelect(id, checked) { if (checked) selectedCredentialIds.add(id); else selectedCredentialIds.delete(id); }
+async function deleteCredential(id) { if (!confirm('确认从仓库删除这个凭证吗？')) return; const res = await fetch(`/api/credentials/${id}`, { method: 'DELETE' }); const data = await res.json(); selectedCredentialIds.delete(id); renderCredentialStore(data.credentials || [], Array.from(els.credentialTargetSelect.options).slice(1).map(o => ({id:o.value,name:o.textContent}))); }
+function parseCredentialBlocks(text, prefix = '') {
+  const parts = String(text || '').split(/\n\s*\n/).map(x => x.trim()).filter(Boolean);
+  return parts.map((part, idx) => ({
+    name: `${prefix || '凭证'}-${idx + 1}`,
+    filename: `${prefix || 'credential'}-${Date.now()}-${idx + 1}.json`,
+    content: part,
+  }));
 }
-async function refreshCpa(id) {
-  const res = await fetch(`/api/cpas/${id}/refresh`, {method:'POST'});
+async function importCredentials() {
+  const items = parseCredentialBlocks(els.credentialBulkInput.value, els.credentialNamePrefix.value.trim());
+  if (!items.length) return alert('先粘贴凭证内容');
+  const res = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
   const data = await res.json();
-  if (!res.ok) {
-    alert(data.error || '刷新失败');
-    if (data.cpa) replaceCpaCard(data.cpa);
-    return;
-  }
-  replaceCpaCard(data.cpa);
+  els.credentialBulkInput.value = '';
+  renderCredentialStore(data.credentials || [], Array.from(els.credentialTargetSelect.options).slice(1).map(o => ({id:o.value,name:o.textContent})));
 }
-async function delete401(id) {
-  if (!confirm('确认一键删除这个 CPA 里的 401 凭证吗？')) return;
-  const res = await fetch(`/api/cpas/${id}/delete-401`, {method:'POST'});
+async function deploySelectedCredentials() {
+  const targetId = els.credentialTargetSelect.value;
+  const ids = Array.from(selectedCredentialIds);
+  if (!targetId) return alert('先选择目标 CPA');
+  if (!ids.length) return alert('先勾选仓库里的凭证');
+  const res = await fetch('/api/credentials/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId, credential_ids: ids }) });
   const data = await res.json();
   if (data.cpa) replaceCpaCard(data.cpa);
-  if (!res.ok) alert('删除401时有失败项');
+  renderCredentialStore(data.credentials || [], Array.from(els.credentialTargetSelect.options).slice(1).map(o => ({id:o.value,name:o.textContent})));
+  alert(`已处理 ${data.results?.length || 0} 个凭证`);
 }
-async function deleteAuthFile(cpaId, encodedName) {
-  if (!confirm('确认删除这个凭证吗？')) return;
-  const res = await fetch(`/api/cpas/${cpaId}/auth-files/${encodedName}`, {method:'DELETE'});
-  const data = await res.json();
-  if (data.cpa) replaceCpaCard(data.cpa);
-  if (!res.ok) alert((data.result && data.result.text) || '删除失败');
-}
-window.deleteCpa = deleteCpa;
-window.refreshCpa = refreshCpa;
-window.delete401 = delete401;
-window.deleteAuthFile = deleteAuthFile;
-
-els.refreshAllBtn.addEventListener('click', () => loadAll(true));
-els.scanCpasBtn.addEventListener('click', async () => {
-  els.scanCpasBtn.disabled = true;
-  els.scanCpasBtn.textContent = '扫描中...';
-  await fetch('/api/cpas/scan', {method:'POST'});
-  await loadAll(true);
-  els.scanCpasBtn.disabled = false;
-  els.scanCpasBtn.textContent = '刷新并扫描全部 CPA';
-});
-
-document.querySelectorAll('.range-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    currentRange = btn.dataset.range || '24h';
-    await loadAll(true);
-  });
-});
-
-els.cpaForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const fd = new FormData(els.cpaForm);
-  const payload = Object.fromEntries(fd.entries());
-  const res = await fetch('/api/cpas', {
-    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
-  });
-  if (!res.ok) {
-    const data = await res.json();
-    alert(data.error || '添加失败');
-    return;
-  }
-  els.cpaForm.reset();
-  await loadAll(true);
-});
-
+async function addCpa(e) { e.preventDefault(); const fd = new FormData(els.cpaForm); const payload = Object.fromEntries(fd.entries()); await fetch('/api/cpas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}); els.cpaForm.reset(); await loadAll(true); }
+async function scanCpas() { await fetch('/api/cpas/scan', {method:'POST'}); await loadAll(true); }
+window.deleteCpa = deleteCpa; window.refreshCpa = refreshCpa; window.delete401 = delete401; window.deleteAuthFile = deleteAuthFile; window.toggleCredentialSelect = toggleCredentialSelect; window.deleteCredential = deleteCredential;
+els.cpaForm?.addEventListener('submit', addCpa);
+els.refreshAllBtn?.addEventListener('click', () => loadAll(true));
+els.scanCpasBtn?.addEventListener('click', scanCpas);
+els.importCredentialsBtn?.addEventListener('click', importCredentials);
+els.selectAllCredentialsBtn?.addEventListener('click', () => { const boxes = Array.from(document.querySelectorAll('#credentialStoreList input[type="checkbox"]')); const allChecked = boxes.length > 0 && boxes.every(el => el.checked); boxes.forEach(el => { const next = !allChecked; el.checked = next; const id = el.closest('.credential-item')?.dataset.credId; if (id) toggleCredentialSelect(id, next); }); });
+els.deploySelectedBtn?.addEventListener('click', deploySelectedCredentials);
+els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
 setInterval(() => loadServerStatus(true), 2000);
 setInterval(() => loadAll(true), 30000);
