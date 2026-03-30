@@ -205,6 +205,25 @@ def upload_image() -> Any:
     }), 201
 
 
+@app.delete("/api/uploads/<upload_id>")
+def delete_upload(upload_id: str) -> Any:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM uploads WHERE id = ?", (upload_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify({"error": "file not found"}), 404
+    data = dict(row)
+    rel = Path(data["relative_path"])
+    target = UPLOAD_DIR / rel
+    if target.exists() and target.is_file():
+        target.unlink()
+    conn.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
+    conn.commit()
+    remaining = [dict(item) for item in conn.execute("SELECT * FROM uploads ORDER BY created_at DESC").fetchall()]
+    conn.close()
+    return jsonify({"uploads": remaining})
+
+
 @app.get("/uploads/<path:subpath>")
 def uploaded_file(subpath: str):
     safe_path = Path(subpath)

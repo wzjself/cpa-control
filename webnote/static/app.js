@@ -4,6 +4,7 @@ const state = {
   activeTabId: null,
   saveTimer: null,
   dragId: null,
+  fileSearch: '',
 };
 
 const els = {
@@ -12,6 +13,7 @@ const els = {
   titleInput: document.getElementById('titleInput'),
   saveStatus: document.getElementById('saveStatus'),
   uploadsList: document.getElementById('uploadsList'),
+  fileSearchInput: document.getElementById('fileSearchInput'),
   newTabBtn: document.getElementById('newTabBtn'),
   deleteTabBtn: document.getElementById('deleteTabBtn'),
   docInput: document.getElementById('docInput'),
@@ -70,18 +72,31 @@ function renderTabs() {
 
 function renderUploads() {
   els.uploadsList.innerHTML = '';
+  const keyword = state.fileSearch.trim().toLowerCase();
+  const filtered = keyword
+    ? state.uploads.filter(item => (item.original_name || '').toLowerCase().includes(keyword))
+    : state.uploads;
+
   if (!state.uploads.length) {
     els.uploadsList.innerHTML = '<div class="upload-card"><strong>还没有文件</strong><div class="meta">上传后的文档会显示在这里。</div></div>';
     return;
   }
-  for (const item of state.uploads) {
+  if (!filtered.length) {
+    els.uploadsList.innerHTML = '<div class="upload-card"><strong>没找到文件</strong><div class="meta">试试换个关键词。</div></div>';
+    return;
+  }
+  for (const item of filtered) {
     const div = document.createElement('div');
     div.className = 'upload-card';
     div.innerHTML = `
       <div><strong>${item.original_name}</strong></div>
       <div class="meta">${item.kind} · ${formatBytes(item.size)}</div>
-      <div class="meta"><a href="/uploads/${item.relative_path}" target="_blank">Open file</a></div>
+      <div class="meta"><a href="/uploads/${item.relative_path}" target="_blank">打开文件</a></div>
+      <div class="upload-actions">
+        <button class="delete-file-btn" data-id="${item.id}">删除</button>
+      </div>
     `;
+    div.querySelector('.delete-file-btn').addEventListener('click', () => deleteUpload(item));
     els.uploadsList.appendChild(div);
   }
 }
@@ -185,6 +200,18 @@ async function uploadImage(file) {
   return await res.json();
 }
 
+async function deleteUpload(item) {
+  if (!confirm(`确认删除文件“${item.original_name}”？`)) return;
+  const res = await fetch(`/api/uploads/${item.id}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || '删除文件失败');
+    return;
+  }
+  state.uploads = data.uploads;
+  renderUploads();
+}
+
 function insertHtmlAtCursor(html) {
   document.execCommand('insertHTML', false, html);
 }
@@ -197,6 +224,12 @@ els.docInput.addEventListener('change', async (e) => {
   await uploadDocuments([...e.target.files]);
   e.target.value = '';
 });
+if (els.fileSearchInput) {
+  els.fileSearchInput.addEventListener('input', (e) => {
+    state.fileSearch = e.target.value || '';
+    renderUploads();
+  });
+}
 els.mobileToggle.addEventListener('click', () => els.sidebar.classList.toggle('open'));
 
 els.editor.addEventListener('paste', async (event) => {
