@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>服务器总览</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260330r">
-  <script src="/static/vendor/chart.umd.js?v=20260330r"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260330s">
+  <script src="/static/vendor/chart.umd.js?v=20260330s"></script>
 </head>
 <body>
   <div class="container">
@@ -84,7 +84,7 @@
         </div>
         <div class="cpa-actions">
           <select id="credentialTargetSelect"></select>
-          <label class="upload-file-btn" for="credentialFilesInput">批量上传 JSON 文件</label>
+          <button id="uploadCredentialFilesBtn" type="button">上传凭证文件</button>
           <input id="credentialFilesInput" type="file" accept=".json,.txt" multiple hidden>
           <button id="deploySelectedBtn">批量上传到目标 CPA</button>
         </div>
@@ -104,6 +104,6 @@
     </section>
 
   </div>
-  <script src="/static/app.js?v=20260330r"></script>
+  <script src="/static/app.js?v=20260330s"></script>
 </body>
 </html>
