@@ -271,12 +271,16 @@ def get_metric_summary(history_hours: int | None = 24) -> dict[str, Any]:
         seconds = max(cur_ts - prev_ts, 1)
         current_rx_kbps = round(max(0.0, (float(cur['net_rx_mb']) - float(prev['net_rx_mb'])) * 1024 / seconds), 2)
         current_tx_kbps = round(max(0.0, (float(cur['net_tx_mb']) - float(prev['net_tx_mb'])) * 1024 / seconds), 2)
+    disk_used_gb = float(latest.get('disk_used_gb') or 0.0)
+    disk_total_gb = float(latest.get('disk_total_gb') or 0.0)
+    disk_free_gb = max(0.0, disk_total_gb - disk_used_gb)
     return {
         'latest': latest,
         'health': compute_health(latest),
         'top_processes': top_processes(),
         'traffic_24h': totals,
         'current_net_kbps': {'rx': current_rx_kbps, 'tx': current_tx_kbps},
+        'disk_usage': {'used_gb': round(disk_used_gb, 2), 'free_gb': round(disk_free_gb, 2), 'total_gb': round(disk_total_gb, 2)},
         'history': history,
     }
 
