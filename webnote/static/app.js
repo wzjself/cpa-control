@@ -71,7 +71,7 @@ function renderTabs() {
 function renderUploads() {
   els.uploadsList.innerHTML = '';
   if (!state.uploads.length) {
-    els.uploadsList.innerHTML = '<div class="upload-card"><strong>No files yet</strong><div class="meta">Uploaded docs will appear here.</div></div>';
+    els.uploadsList.innerHTML = '<div class="upload-card"><strong>还没有文件</strong><div class="meta">上传后的文档会显示在这里。</div></div>';
     return;
   }
   for (const item of state.uploads) {
@@ -113,7 +113,7 @@ async function bootstrap() {
 async function saveActiveTab() {
   const tab = activeTab();
   if (!tab) return;
-  setStatus('Saving...');
+  setStatus('保存中...');
   const payload = {
     title: els.titleInput.value.trim() || 'Untitled',
     content_html: els.editor.innerHTML,
@@ -126,12 +126,12 @@ async function saveActiveTab() {
   const updated = await res.json();
   const idx = state.tabs.findIndex(t => t.id === tab.id);
   state.tabs[idx] = updated;
-  setStatus('Saved');
+  setStatus('已保存');
   renderTabs();
 }
 
 function scheduleSave() {
-  setStatus('Editing...');
+  setStatus('编辑中...');
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(saveActiveTab, 500);
 }
@@ -140,7 +140,7 @@ async function createTab() {
   const res = await fetch('/api/tabs', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({title: 'New Page'}),
+    body: JSON.stringify({title: '新标签'}),
   });
   const tab = await res.json();
   state.tabs.push(tab);
@@ -152,11 +152,11 @@ async function createTab() {
 async function deleteTab() {
   const tab = activeTab();
   if (!tab) return;
-  if (!confirm(`Delete tab "${tab.title}"?`)) return;
+  if (!confirm(`确认删除标签“${tab.title}”？`)) return;
   const res = await fetch(`/api/tabs/${tab.id}`, { method: 'DELETE' });
   const data = await res.json();
   if (!res.ok) {
-    alert(data.error || 'Delete failed');
+    alert(data.error || '删除失败');
     return;
   }
   state.tabs = data.tabs;
@@ -204,7 +204,7 @@ els.editor.addEventListener('paste', async (event) => {
   const imageItem = items.find(item => item.type.startsWith('image/'));
   if (!imageItem) return;
   event.preventDefault();
-  setStatus('Uploading image...');
+  setStatus('上传图片中...');
   const file = imageItem.getAsFile();
   const image = await uploadImage(file);
   insertHtmlAtCursor(`<p><img src="${image.url}" alt="${image.name}"></p>`);

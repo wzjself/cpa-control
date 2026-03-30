@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>WebNote</title>
+  <title>云笔记</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -11,31 +11,31 @@
     <aside class="sidebar" id="sidebar">
       <div class="brand">
         <div>
-          <h1>WebNote</h1>
-          <p>Multi-tab notes + files</p>
+          <h1>云笔记</h1>
+          <p>多标签笔记 + 文件同步</p>
         </div>
         <button class="mobile-toggle" id="mobileToggle">☰</button>
       </div>
       <div class="sidebar-actions">
-        <button id="newTabBtn">+ New tab</button>
+        <button id="newTabBtn">+ 新建标签</button>
       </div>
       <div class="tab-list" id="tabList"></div>
       <div class="upload-panel">
-        <h3>Document upload</h3>
+        <h3>上传文档</h3>
         <label class="upload-button">
-          <input type="file" id="docInput" multiple />
-          <span>Upload files</span>
+          <input type="file" id="docInput" multiple accept="*/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.zip,.rar,.7z" />
+          <span>选择文档 / 任意文件</span>
         </label>
-        <p class="hint">Files are stored on the server in a dedicated project folder.</p>
+        <p class="hint">文件会保存到服务器项目的独立文件夹里。微信内置浏览器若仍只显示图片/视频，建议点右上角后用系统浏览器打开。</p>
       </div>
     </aside>
 
     <main class="main-panel">
       <header class="topbar">
-        <input id="titleInput" class="title-input" placeholder="Page title" />
+        <input id="titleInput" class="title-input" placeholder="标签标题" />
         <div class="status-wrap">
-          <span id="saveStatus" class="save-status">Ready</span>
-          <button id="deleteTabBtn" class="ghost danger">Delete tab</button>
+          <span id="saveStatus" class="save-status">就绪</span>
+          <button id="deleteTabBtn" class="ghost danger">删除标签</button>
         </div>
       </header>
 
@@ -45,8 +45,8 @@
 
       <section class="uploads-wrap">
         <div class="section-title-row">
-          <h3>Uploaded files</h3>
-          <span class="hint">Paste images directly into the note editor 📎</span>
+          <h3>已上传文件</h3>
+          <span class="hint">可直接在编辑区粘贴图片 📎</span>
         </div>
         <div id="uploadsList" class="uploads-list"></div>
       </section>
