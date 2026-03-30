@@ -123,7 +123,10 @@ function accountStatusClass(acc) {
 }
 
 function renderCpas(cpas) {
-  els.cpaList.innerHTML = cpas.map(cpa => `
+  els.cpaList.innerHTML = cpas.map(cpa => {
+    const knownQuotaAccounts = (cpa.accounts || []).filter(acc => acc.remaining_ratio !== null && acc.remaining_ratio !== undefined).length;
+    const unknownQuotaAccounts = Math.max(0, (cpa.total || 0) - knownQuotaAccounts);
+    return `
     <div class="cpa-card">
       <div class="cpa-head">
         <div>
@@ -142,8 +145,8 @@ function renderCpas(cpas) {
         <div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div>
       </div>
       <div class="quota-row">
-        <div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? '暂未拿到额度数据' : `已用 ${fmtMaybePct(cpa.used_ratio)} / 剩余 ${fmtMaybePct(cpa.remaining_ratio)}`}</span></div>
-        <div class="progress used"><span style="width:${cpa.used_ratio ?? 0}%"></span></div>
+        <div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? `已知额度 ${knownQuotaAccounts} 个 · 未知 ${unknownQuotaAccounts} 个` : `已用 ${fmtMaybePct(cpa.used_ratio)} / 剩余 ${fmtMaybePct(cpa.remaining_ratio)} · 未知 ${unknownQuotaAccounts} 个`}</span></div>
+        <div class="progress used"><span style="width:${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? 0 : (cpa.used_ratio ?? 0)}%"></span></div>
       </div>
       <div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）</div>
       <div class="list">
@@ -160,7 +163,8 @@ function renderCpas(cpas) {
         `).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>'}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function setActiveRangeBtn() {
