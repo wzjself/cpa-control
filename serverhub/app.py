@@ -195,7 +195,7 @@ def top_processes(limit: int = 5) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
-def compute_health(sample: dict[str, Any]) -> int:
+def compute_health(sample: dict[str, Any], clirelay: dict[str, Any] | None = None) -> int:
     score = 100.0
     score -= max(0, sample['cpu_percent'] - 65) * 0.6
     score -= max(0, sample['mem_percent'] - 70) * 0.7
