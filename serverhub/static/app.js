@@ -17,10 +17,12 @@ const els = {
   trafficChartTitle: document.getElementById('trafficChartTitle'),
 };
 
-const fmtPct = n => `${Number(n || 0).toFixed(1)}%`;
+const fmtPct = n => `${Number(n ?? 0).toFixed(1)}%`;
+const fmtMaybePct = n => (n === null || n === undefined || Number.isNaN(Number(n))) ? '未知' : `${Number(n).toFixed(1)}%`;
 const fmtNum = n => new Intl.NumberFormat('zh-CN').format(Number(n || 0));
 const fmtMb = n => `${Number(n || 0).toFixed(1)} MB`;
 const rangeLabel = key => ({'3h':'3小时','24h':'24小时','7d':'7天','30d':'30天','all':'所有时间'}[key] || '24小时');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function downsample(history, maxPoints = 120) {
   if (!Array.isArray(history) || history.length <= maxPoints) return history || [];
@@ -140,19 +142,19 @@ function renderCpas(cpas) {
         <div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div>
       </div>
       <div class="quota-row">
-        <div class="quota-label"><span>总凭证额度使用情况</span><span>已用 ${cpa.used_ratio || 0}% / 总额度 100%</span></div>
-        <div class="progress used"><span style="width:${cpa.used_ratio || 0}%"></span></div>
+        <div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? '暂未拿到额度数据' : `已用 ${fmtMaybePct(cpa.used_ratio)} / 剩余 ${fmtMaybePct(cpa.remaining_ratio)}`}</span></div>
+        <div class="progress used"><span style="width:${cpa.used_ratio ?? 0}%"></span></div>
       </div>
       <div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）</div>
       <div class="list">
         ${(cpa.accounts || []).map(acc => `
           <div class="account-row">
             <div class="account-top">
-              <strong>${acc.email || acc.name}</strong>
+              <strong>${esc(acc.email || acc.name)}</strong>
               <span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span>
             </div>
-            <div class="progress"><span style="width:${acc.remaining_ratio || 0}%"></span></div>
-            <div class="muted">剩余估计：${acc.remaining_ratio || 0}%${acc.status_message ? ` · ${acc.status_message}` : ''}</div>
+            <div class="progress"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
+            <div class="muted">剩余额度：${fmtMaybePct(acc.remaining_ratio)}${acc.status_message ? ` · ${esc(acc.status_message)}` : ''}</div>
             <div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除凭证</button></div>
           </div>
         `).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>'}
