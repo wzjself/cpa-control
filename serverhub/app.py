@@ -196,12 +196,12 @@ def top_processes(limit: int = 5) -> list[dict[str, Any]]:
 
 
 def compute_health(sample: dict[str, Any], clirelay: dict[str, Any] | None = None) -> int:
-    score = 100.0
-    score -= max(0, sample['cpu_percent'] - 65) * 0.6
-    score -= max(0, sample['mem_percent'] - 70) * 0.7
-    score -= max(0, sample['disk_percent'] - 75) * 0.8
-    score -= max(0, sample['load_1'] - os.cpu_count()) * 5
-    return int(max(0, min(100, round(score))))
+    system = (clirelay or {}).get('system') or {}
+    cpu = float(system.get('system_cpu_pct', sample.get('cpu_percent', 0.0)) or 0.0)
+    mem = float(system.get('system_mem_pct', sample.get('mem_percent', 0.0)) or 0.0)
+    disk = float(system.get('disk_pct', sample.get('disk_percent', 0.0)) or 0.0)
+    raw = 100 - (cpu * 0.35 + mem * 0.35 + disk * 0.30)
+    return int(max(0, min(100, round(raw))))
 
 
 def collect_sample() -> dict[str, Any]:
