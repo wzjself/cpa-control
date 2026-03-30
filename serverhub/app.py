@@ -14,6 +14,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from flask import Flask, jsonify, render_template, request
 import requests
@@ -29,6 +30,7 @@ SAMPLE_INTERVAL = 60
 RETENTION_DAYS = 30
 PORT = int(os.environ.get("SERVERHUB_PORT", "8321"))
 HOST = os.environ.get("SERVERHUB_HOST", "0.0.0.0")
+WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -416,6 +418,88 @@ def fetch_cpa_auth_files(target: dict[str, Any]) -> list[dict[str, Any]]:
     return data.get('files', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
 
 
+def extract_remaining_ratio(rate_limit: dict[str, Any] | None) -> float | None:
+    if not isinstance(rate_limit, dict):
+        return None
+    window = rate_limit.get('primary_window') if isinstance(rate_limit.get('primary_window'), dict) else rate_limit
+    used_percent = window.get('used_percent') if isinstance(window, dict) else None
+    try:
+        if used_percent is None:
+            return None
+        return max(0.0, min(1.0, 1.0 - (float(used_percent) / 100.0)))
+    except Exception:
+        return None
+
+
+def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+    auth_index = str(item.get('auth_index') or '').strip()
+    id_token = item.get('id_token') or {}
+    account_id = str(id_token.get('chatgpt_account_id') or item.get('chatgpt_account_id') or '').strip()
+    if not auth_index or not account_id:
+        return None
+    payload = {
+        'authIndex': auth_index,
+        'method': 'GET',
+        'url': WHAM_USAGE_URL,
+        'header': {
+            'Authorization': 'Bearer $TOKEN$',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+            'Chatgpt-Account-Id': account_id,
+        },
+    }
+    url = f"{target['base_url'].rstrip('/')}/v0/management/api-call"
+    r = requests.post(url, headers=mgmt_headers(target['token'], include_json=True), json=payload, timeout=25)
+    r.raise_for_status()
+    outer = r.json()
+    if not isinstance(outer, dict) or outer.get('status_code') != 200:
+        return None
+    body = outer.get('body')
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except Exception:
+            return None
+    if not isinstance(body, dict):
+        return None
+    rate_limit = body.get('rate_limit') if isinstance(body.get('rate_limit'), dict) else None
+    remaining = extract_remaining_ratio(rate_limit)
+    return {
+        'remaining_ratio': round(remaining * 100, 2) if remaining is not None else None,
+        'quota_limited': bool(rate_limit.get('limit_reached')) if isinstance(rate_limit, dict) else False,
+        'plan_type': str(body.get('plan_type') or item.get('plan_type') or ((item.get('id_token') or {}).get('plan_type')) or 'unknown').lower(),
+        'quota_signal_source': 'wham-usage',
+    }
+
+
+def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    need = []
+    for idx, item in enumerate(files):
+        if item.get('quota_remaining_ratio') is None and item.get('usage_remaining_ratio') is None:
+            if item.get('auth_index') and ((item.get('id_token') or {}).get('chatgpt_account_id') or item.get('chatgpt_account_id')):
+                need.append((idx, item))
+    if not need:
+        return files
+    max_workers = min(4, len(need))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fut_map = {pool.submit(probe_cpa_quota, target, item): idx for idx, item in need}
+        for fut in as_completed(fut_map):
+            idx = fut_map[fut]
+            try:
+                info = fut.result()
+            except Exception:
+                info = None
+            if not info:
+                continue
+            if info.get('remaining_ratio') is not None:
+                files[idx]['usage_remaining_ratio'] = round(float(info['remaining_ratio']) / 100.0, 4)
+            if info.get('quota_limited') is not None:
+                files[idx]['usage_limit_reached'] = bool(info['quota_limited'])
+            if info.get('plan_type'):
+                files[idx]['plan_type'] = info['plan_type']
+    return files
+
+
 def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
     raw_status = str(item.get('status') or '').lower()
     msg = str(item.get('status_message') or '')
@@ -593,7 +677,7 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
     accounts: list[dict[str, Any]] = []
     warden_map = load_cpa_warden_accounts(target)
     try:
-        files = fetch_cpa_auth_files(target)
+        files = hydrate_live_quota(target, fetch_cpa_auth_files(target))
         live_accounts = [classify_cpa_file(item) for item in files]
         accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
         summary['last_run'] = {
