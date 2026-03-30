@@ -409,9 +409,9 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
     raw_status = str(item.get('status') or '').lower()
     msg = str(item.get('status_message') or '')
     msg_lower = msg.lower()
+    plan_type = str(((item.get('id_token') or {}).get('plan_type')) or item.get('plan_type') or 'unknown').lower()
     is_401 = ('401' in msg_lower) or ('unauthorized' in msg_lower) or ('invalid_api_key' in msg_lower) or ('token_expired' in msg_lower)
     is_limit = ('usage_limit_reached' in msg_lower) or ('rate_limit' in msg_lower) or ('quota' in msg_lower) or ('limit' in msg_lower and not is_401)
-    remaining_ratio = None
     if is_limit:
         remaining_ratio = 0.0
     elif raw_status in {'ok', 'active', 'ready'} and not item.get('unavailable'):
@@ -429,7 +429,97 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
         'remaining_ratio': round(float(remaining_ratio or 0), 2),
         'status': raw_status or ('401' if is_401 else 'limit' if is_limit else 'unknown'),
         'status_message': msg,
+        'plan_type': plan_type,
+        'source': 'management-auth-files',
     }
+
+
+def load_cpa_warden_accounts(target: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    db = cpa_db_path(target['id'])
+    if not db.exists():
+        return {}
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    rows = [dict(r) for r in cur.execute("SELECT * FROM auth_accounts ORDER BY updated_at DESC, name").fetchall()]
+    conn.close()
+    out = {}
+    for r in rows:
+        key = str((r.get('name') or '')).lower()
+        out[key] = {
+            'name': r.get('name'),
+            'email': r.get('email'),
+            'disabled': bool(r.get('disabled')),
+            'invalid_401': bool(r.get('is_invalid_401')) or str(r.get('api_status_code') or '') == '401',
+            'quota_limited': bool(r.get('is_quota_limited')) or bool(r.get('usage_limit_reached')),
+            'remaining_ratio': round(((r.get('quota_remaining_ratio') if r.get('quota_remaining_ratio') is not None else r.get('usage_remaining_ratio')) or 0) * 100, 2) if ((r.get('quota_remaining_ratio') is not None) or (r.get('usage_remaining_ratio') is not None)) else None,
+            'status': r.get('status') or 'unknown',
+            'status_message': r.get('status_message') or '',
+            'plan_type': (r.get('usage_plan_type') or r.get('id_token_plan_type') or 'unknown'),
+            'api_status_code': r.get('api_status_code'),
+            'usage_allowed': r.get('usage_allowed'),
+            'source': 'warden-db',
+        }
+    return out
+
+
+def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    merged = []
+    seen = set()
+    for acc in auth_accounts:
+        key = str((acc.get('name') or '')).lower()
+        w = warden_map.get(key, {})
+        invalid_401 = bool(w.get('invalid_401')) or bool(acc.get('invalid_401'))
+        quota_limited = bool(acc.get('quota_limited')) or (bool(w.get('quota_limited')) and not invalid_401)
+        plan_type = str(acc.get('plan_type') or w.get('plan_type') or 'unknown').lower()
+        remaining_ratio = acc.get('remaining_ratio')
+        if w.get('remaining_ratio') is not None:
+            remaining_ratio = w.get('remaining_ratio')
+        if quota_limited:
+            remaining_ratio = 0.0
+        elif invalid_401:
+            remaining_ratio = 0.0
+        elif remaining_ratio is None:
+            remaining_ratio = 100.0 if (str(acc.get('status') or '').lower() in {'ok', 'active', 'ready'} and not acc.get('disabled')) else 5.0
+        status = '401' if invalid_401 else 'limit' if quota_limited else plan_type if plan_type != 'unknown' else (acc.get('status') or w.get('status') or 'unknown')
+        status_message = acc.get('status_message') or w.get('status_message') or ''
+        merged.append({
+            'name': acc.get('name') or w.get('name'),
+            'email': acc.get('email') or w.get('email'),
+            'disabled': bool(acc.get('disabled')) or bool(w.get('disabled')),
+            'invalid_401': invalid_401,
+            'quota_limited': quota_limited,
+            'remaining_ratio': round(float(remaining_ratio or 0), 2),
+            'status': status,
+            'status_message': status_message,
+            'plan_type': plan_type,
+            'source': 'merged',
+        })
+        seen.add(key)
+    for key, w in warden_map.items():
+        if key in seen:
+            continue
+        invalid_401 = bool(w.get('invalid_401'))
+        quota_limited = bool(w.get('quota_limited')) and not invalid_401
+        plan_type = str(w.get('plan_type') or 'unknown').lower()
+        remaining_ratio = w.get('remaining_ratio')
+        if quota_limited or invalid_401:
+            remaining_ratio = 0.0
+        elif remaining_ratio is None:
+            remaining_ratio = 100.0 if bool(w.get('usage_allowed')) else 5.0
+        merged.append({
+            'name': w.get('name'),
+            'email': w.get('email'),
+            'disabled': bool(w.get('disabled')),
+            'invalid_401': invalid_401,
+            'quota_limited': quota_limited,
+            'remaining_ratio': round(float(remaining_ratio or 0), 2),
+            'status': '401' if invalid_401 else 'limit' if quota_limited else plan_type if plan_type != 'unknown' else (w.get('status') or 'unknown'),
+            'status_message': w.get('status_message') or '',
+            'plan_type': plan_type,
+            'source': 'warden-db-only',
+        })
+    return merged
 
 
 def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
@@ -439,10 +529,17 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
         'used_ratio': 0, 'remaining_ratio': 0, 'accounts': [], 'last_run': None,
     }
     accounts: list[dict[str, Any]] = []
+    warden_map = load_cpa_warden_accounts(target)
     try:
         files = fetch_cpa_auth_files(target)
-        accounts = [classify_cpa_file(item) for item in files]
-        summary['last_run'] = {'source': 'management-auth-files', 'count': len(accounts)}
+        live_accounts = [classify_cpa_file(item) for item in files]
+        accounts = merge_cpa_accounts(live_accounts, warden_map)
+        summary['last_run'] = {
+            'source': 'management-auth-files+warden-db',
+            'count': len(accounts),
+            'live_count': len(live_accounts),
+            'warden_count': len(warden_map),
+        }
     except Exception:
         db = cpa_db_path(target['id'])
         if db.exists():
@@ -450,34 +547,45 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             rows = [dict(r) for r in cur.execute("SELECT * FROM auth_accounts ORDER BY updated_at DESC, name").fetchall()]
-            accounts = [{
+            db_accounts = [{
                 'name': r.get('name'),
                 'email': r.get('email'),
                 'disabled': bool(r.get('disabled')),
-                'invalid_401': bool(r.get('is_invalid_401')),
-                'quota_limited': bool(r.get('is_quota_limited')),
-                'remaining_ratio': round(((r.get('quota_remaining_ratio') if r.get('quota_remaining_ratio') is not None else r.get('usage_remaining_ratio')) or 0) * 100, 2),
+                'invalid_401': bool(r.get('is_invalid_401')) or str(r.get('api_status_code') or '') == '401',
+                'quota_limited': bool(r.get('is_quota_limited')) or bool(r.get('usage_limit_reached')),
+                'remaining_ratio': round(((r.get('quota_remaining_ratio') if r.get('quota_remaining_ratio') is not None else r.get('usage_remaining_ratio')) or 0) * 100, 2) if ((r.get('quota_remaining_ratio') is not None) or (r.get('usage_remaining_ratio') is not None)) else None,
                 'status': r.get('status') or 'unknown',
                 'status_message': r.get('status_message') or '',
+                'plan_type': str(r.get('usage_plan_type') or r.get('id_token_plan_type') or 'unknown').lower(),
+                'source': 'warden-db',
             } for r in rows]
+            accounts = db_accounts
             run = cur.execute("SELECT * FROM scan_runs ORDER BY run_id DESC LIMIT 1").fetchone()
             if run:
                 summary['last_run'] = dict(run)
             conn.close()
+        elif warden_map:
+            accounts = merge_cpa_accounts([], warden_map)
+            summary['last_run'] = {'source': 'warden-db-only', 'count': len(accounts)}
+
+    accounts.sort(key=lambda r: (
+        0 if r.get('invalid_401') else 1 if r.get('quota_limited') else 2 if r.get('disabled') else 3,
+        float(r.get('remaining_ratio') or 0),
+        str(r.get('email') or r.get('name') or ''),
+    ))
 
     if accounts:
         summary['total'] = len(accounts)
         summary['invalid_401'] = sum(1 for r in accounts if r.get('invalid_401'))
         summary['quota_limited'] = sum(1 for r in accounts if r.get('quota_limited'))
         summary['disabled'] = sum(1 for r in accounts if r.get('disabled'))
-        summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited'))
+        summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited') and not r.get('disabled'))
         remaining_values = [float(r.get('remaining_ratio') or 0) for r in accounts]
         if remaining_values:
             summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
             summary['used_ratio'] = round(100 - summary['remaining_ratio'], 2)
         summary['accounts'] = accounts[:200]
     return summary
-
 
 def delete_cpa_auth_file(target: dict[str, Any], name: str) -> dict[str, Any]:
     from urllib.parse import quote
