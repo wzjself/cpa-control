@@ -296,6 +296,7 @@ function renderCpaCard(cpa) {
               <strong title="${esc(acc.email || acc.name)}">${esc(acc.email || acc.name)}</strong>
               <span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span>
             </div>
+            <div class="progress mini-remain"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
             <div class="muted">剩余 ${fmtMaybePct(acc.remaining_ratio)}</div>
             <div class="muted">${acc.quota_checked_at ? `更新 ${fmtTime(acc.quota_checked_at)}` : '未取到时间'}</div>
             <div class="account-actions"><button class="danger small-btn" onclick="deleteAuthFile('${cpa.id}', '${encodeURIComponent(acc.name || acc.email || '')}')">删除</button></div>
