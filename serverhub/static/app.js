@@ -7,6 +7,13 @@ function destroyCanvasChart(canvas) {
   if (ctx) ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
 }
 
+function formatRateLabel(v) {
+  const n = Number(v) || 0;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} GB/min`;
+  if (n >= 1) return `${n.toFixed(1)} MB/min`;
+  return `${(n * 1024).toFixed(0)} KB/min`;
+}
+
 function drawSimpleLineChart(canvas, datasets, opts = {}) {
   if (!canvas) return;
   const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -78,7 +85,7 @@ function drawSimpleLineChart(canvas, datasets, opts = {}) {
   for (let i = 0; i <= 4; i++) {
     const v = maxY - ((maxY - minY) * i / 4);
     const y = pad.top + (h * i / 4);
-    ctx.fillText(`${Math.round(v)}`, pad.left - 6, y);
+    ctx.fillText(opts.yFormatter ? opts.yFormatter(v) : `${Math.round(v)}`, pad.left - 6, y);
   }
 
   const labels = opts.labels || [];
@@ -205,7 +212,8 @@ function renderTrafficChart(historyRaw) {
   drawSimpleLineChart(canvas, [
     { label: '下载速率', data: rx, color: '#22c55e' },
     { label: '上传速率', data: tx, color: '#f472b6' },
-  ], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240 });
+  ], { labels, minY: 0, maxY: Math.max(1, ...allVals), height: 240, yFormatter: formatRateLabel });
+  renderChartFallback(canvas, '纵坐标单位：网络速率（KB/min / MB/min / GB/min）');
 }
 
 function renderProcesses(items) {
