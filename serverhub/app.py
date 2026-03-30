@@ -415,6 +415,15 @@ def load_cpas() -> list[dict[str, Any]]:
     return rows
 
 
+def normalize_credential_name(value: str) -> str:
+    raw = str(value or '').strip().lower()
+    for suffix in ('.json', '.txt'):
+        if raw.endswith(suffix):
+            raw = raw[:-len(suffix)]
+            break
+    return raw
+
+
 def list_credentials() -> list[dict[str, Any]]:
     conn = get_conn()
     rows = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
@@ -1091,7 +1100,7 @@ def api_sync_credential_upload_status():
     summary = cpa_summary(target)
     account_map = {}
     for acc in summary.get('accounts', []):
-        key = (acc.get('email') or acc.get('name') or '').strip().lower()
+        key = normalize_credential_name(acc.get('email') or acc.get('name') or '')
         if key:
             if acc.get('invalid_401'):
                 status_text = '401失效'
@@ -1108,13 +1117,13 @@ def api_sync_credential_upload_status():
     creds = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
     now = now_iso()
     for row in creds:
-        raw = (row.get('name') or row.get('filename') or '').strip().lower()
+        raw = normalize_credential_name(row.get('name') or row.get('filename') or '')
         hit = account_map.get(raw)
         if hit:
             matched += 1
             conn.execute('UPDATE credential_store SET uploaded_to_cpa = 1, last_target_id = ?, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (target_id, hit['status_text'], hit['detail'], now, row['id']))
         else:
-            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, last_target_id = ?, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (target_id, '', '', now, row['id']))
+            pass
     conn.commit()
     conn.close()
     return jsonify({'ok': True, 'matched': matched, 'credentials': list_credentials(), 'cpas': load_cpas()})
