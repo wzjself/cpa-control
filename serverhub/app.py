@@ -262,11 +262,21 @@ def get_metric_summary(history_hours: int | None = 24) -> dict[str, Any]:
     if history:
         totals['rx_mb'] = round(history[-1]['net_rx_mb'] - history[0]['net_rx_mb'], 2)
         totals['tx_mb'] = round(history[-1]['net_tx_mb'] - history[0]['net_tx_mb'], 2)
+    current_rx_kbps = 0.0
+    current_tx_kbps = 0.0
+    if len(history) >= 2:
+        prev, cur = history[-2], history[-1]
+        prev_ts = datetime.fromisoformat(prev['ts']).timestamp()
+        cur_ts = datetime.fromisoformat(cur['ts']).timestamp()
+        seconds = max(cur_ts - prev_ts, 1)
+        current_rx_kbps = round(max(0.0, (float(cur['net_rx_mb']) - float(prev['net_rx_mb'])) * 1024 / seconds), 2)
+        current_tx_kbps = round(max(0.0, (float(cur['net_tx_mb']) - float(prev['net_tx_mb'])) * 1024 / seconds), 2)
     return {
         'latest': latest,
         'health': compute_health(latest),
         'top_processes': top_processes(),
         'traffic_24h': totals,
+        'current_net_kbps': {'rx': current_rx_kbps, 'tx': current_tx_kbps},
         'history': history,
     }
 
@@ -368,6 +378,34 @@ def get_clirelay_summary() -> dict[str, Any]:
         'top_api_keys': by_key,
         'recent': recent,
     }
+
+
+def get_cpa_usage_stats(target: dict[str, Any]) -> dict[str, Any]:
+    if not CLIRELAY_DB.exists():
+        return {'request_count': 0, 'total_tokens': 0, 'matched_by': ''}
+    conn = sqlite3.connect(CLIRELAY_DB)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    candidates = [str(target.get('name') or '').strip()]
+    request_count = 0
+    total_tokens = 0
+    matched_by = ''
+    for field in ('channel_name', 'api_key_name'):
+        for value in candidates:
+            if not value:
+                continue
+            row = cur.execute(
+                f"SELECT COUNT(*) AS request_count, COALESCE(SUM(total_tokens), 0) AS total_tokens FROM request_logs WHERE {field} = ?",
+                (value,),
+            ).fetchone()
+            if row and ((row['request_count'] or 0) > 0 or (row['total_tokens'] or 0) > 0):
+                request_count = int(row['request_count'] or 0)
+                total_tokens = int(row['total_tokens'] or 0)
+                matched_by = f'{field}:{value}'
+                conn.close()
+                return {'request_count': request_count, 'total_tokens': total_tokens, 'matched_by': matched_by}
+    conn.close()
+    return {'request_count': 0, 'total_tokens': 0, 'matched_by': ''}
 
 
 def load_cpas() -> list[dict[str, Any]]:
@@ -764,6 +802,10 @@ def cpa_summary(target: dict[str, Any]) -> dict[str, Any]:
         str(r.get('email') or r.get('name') or ''),
     ))
 
+    usage_stats = get_cpa_usage_stats(target)
+    summary['request_count'] = usage_stats['request_count']
+    summary['total_tokens'] = usage_stats['total_tokens']
+    summary['usage_matched_by'] = usage_stats['matched_by']
     if accounts:
         summary['total'] = len(accounts)
         summary['invalid_401'] = sum(1 for r in accounts if r.get('invalid_401'))
