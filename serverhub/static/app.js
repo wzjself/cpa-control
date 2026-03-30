@@ -1,6 +1,98 @@
 let usageChart, trafficChart;
 let currentRange = '24h';
 
+function destroyCanvasChart(canvas) {
+  if (!canvas) return;
+  const ctx = canvas.getContext && canvas.getContext('2d');
+  if (ctx) ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+}
+
+function drawSimpleLineChart(canvas, datasets, opts = {}) {
+  if (!canvas) return;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssWidth = Math.max(320, canvas.clientWidth || canvas.parentElement?.clientWidth || 600);
+  const cssHeight = Math.max(220, opts.height || 240);
+  canvas.width = Math.floor(cssWidth * dpr);
+  canvas.height = Math.floor(cssHeight * dpr);
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const pad = { top: 12, right: 10, bottom: 24, left: 34 };
+  const w = cssWidth - pad.left - pad.right;
+  const h = cssHeight - pad.top - pad.bottom;
+  if (w <= 10 || h <= 10) return;
+
+  const values = datasets.flatMap(ds => ds.data || []).filter(v => Number.isFinite(v));
+  if (!values.length) return;
+  let minY = Number.isFinite(opts.minY) ? opts.minY : Math.min(...values);
+  let maxY = Number.isFinite(opts.maxY) ? opts.maxY : Math.max(...values);
+  if (minY === maxY) {
+    minY = minY - 1;
+    maxY = maxY + 1;
+  }
+  if (opts.beginAtZero) minY = Math.min(0, minY);
+
+  ctx.strokeStyle = 'rgba(158,177,206,0.18)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (h * i / 4);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + w, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = 'rgba(158,177,206,0.35)';
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, pad.top + h);
+  ctx.lineTo(pad.left + w, pad.top + h);
+  ctx.stroke();
+
+  const toX = (idx, total) => pad.left + (total <= 1 ? 0 : (w * idx / (total - 1)));
+  const toY = val => pad.top + h - ((val - minY) / (maxY - minY)) * h;
+
+  datasets.forEach(ds => {
+    const data = ds.data || [];
+    ctx.strokeStyle = ds.color || '#60a5fa';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = toX(i, data.length);
+      const y = toY(Number(v) || 0);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+
+  ctx.fillStyle = '#9eb1ce';
+  ctx.font = '12px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i <= 4; i++) {
+    const v = maxY - ((maxY - minY) * i / 4);
+    const y = pad.top + (h * i / 4);
+    ctx.fillText(`${Math.round(v)}`, pad.left - 6, y);
+  }
+
+  const labels = opts.labels || [];
+  const tickCount = Math.min(6, labels.length);
+  if (tickCount > 0) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i < tickCount; i++) {
+      const idx = Math.round((labels.length - 1) * (tickCount === 1 ? 0 : i / (tickCount - 1)));
+      ctx.fillText(String(labels[idx] || ''), toX(idx, labels.length), pad.top + h + 6);
+    }
+  }
+}
+
 const els = {
   refreshAllBtn: document.getElementById('refreshAllBtn'),
   scanCpasBtn: document.getElementById('scanCpasBtn'),
@@ -67,25 +159,13 @@ function renderUsageChart(historyRaw) {
     renderChartFallback(canvas, '暂无历史数据');
     return;
   }
-  if (typeof Chart === 'undefined') {
-    renderChartFallback(canvas, '图表组件加载失败，但下方数据仍可正常查看');
-    return;
-  }
   clearChartFallback(canvas);
-  const config = {
-    type: 'line',
-    data: {
-      labels: chartLabels(history),
-      datasets: [
-        {label: 'CPU', data: history.map(x => x.cpu_percent), borderColor: '#60a5fa', tension: .25, pointRadius: 0},
-        {label: '内存', data: history.map(x => x.mem_percent), borderColor: '#34d399', tension: .25, pointRadius: 0},
-        {label: '磁盘', data: history.map(x => x.disk_percent), borderColor: '#f59e0b', tension: .25, pointRadius: 0},
-      ]
-    },
-    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200, parsing:false, normalized:true, scales:{x:{ticks:{maxTicksLimit:8}},y:{beginAtZero:true,max:100}}}
-  };
-  if (usageChart) usageChart.destroy();
-  usageChart = new Chart(canvas, config);
+  destroyCanvasChart(canvas);
+  drawSimpleLineChart(canvas, [
+    { label: 'CPU', data: history.map(x => Number(x.cpu_percent) || 0), color: '#60a5fa' },
+    { label: '内存', data: history.map(x => Number(x.mem_percent) || 0), color: '#34d399' },
+    { label: '磁盘', data: history.map(x => Number(x.disk_percent) || 0), color: '#f59e0b' },
+  ], { labels: chartLabels(history), minY: 0, maxY: 100, beginAtZero: true, height: 240 });
 }
 
 function renderTrafficChart(historyRaw) {
@@ -95,24 +175,15 @@ function renderTrafficChart(historyRaw) {
     renderChartFallback(canvas, '暂无历史数据');
     return;
   }
-  if (typeof Chart === 'undefined') {
-    renderChartFallback(canvas, '图表组件加载失败，但下方数据仍可正常查看');
-    return;
-  }
   clearChartFallback(canvas);
-  const config = {
-    type: 'line',
-    data: {
-      labels: chartLabels(history),
-      datasets: [
-        {label: '下载', data: history.map(x => x.net_rx_mb), borderColor: '#22c55e', tension: .25, pointRadius: 0},
-        {label: '上传', data: history.map(x => x.net_tx_mb), borderColor: '#f472b6', tension: .25, pointRadius: 0},
-      ]
-    },
-    options: {responsive:true, maintainAspectRatio:false, animation:false, resizeDelay:200, parsing:false, normalized:true, scales:{x:{ticks:{maxTicksLimit:8}}}}
-  };
-  if (trafficChart) trafficChart.destroy();
-  trafficChart = new Chart(canvas, config);
+  destroyCanvasChart(canvas);
+  const rx = history.map(x => Number(x.net_rx_mb) || 0);
+  const tx = history.map(x => Number(x.net_tx_mb) || 0);
+  const allVals = rx.concat(tx);
+  drawSimpleLineChart(canvas, [
+    { label: '下载', data: rx, color: '#22c55e' },
+    { label: '上传', data: tx, color: '#f472b6' },
+  ], { labels: chartLabels(history), minY: Math.min(...allVals), maxY: Math.max(...allVals), height: 240 });
 }
 
 function renderProcesses(items) {
