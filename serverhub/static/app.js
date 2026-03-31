@@ -5,7 +5,7 @@ let credentialSearch = '';
 let credentialUploadFilter = 'all';
 let latestCredentials = [];
 let latestCpas = [];
-let credentialStoreExpanded = false;
+let credentialStoreExpanded = true;
 const recentlyHighlightedCredentialIds = new Set();
 
 const els = {
@@ -125,9 +125,16 @@ function renderCredentialStore(credentials = [], cpas = []) {
   }
   const activeTargetId = els.credentialTargetSelect?.value || '';
   const activeTarget = latestCpas.find(c => String(c.id) === String(activeTargetId));
-  const filtered = latestCredentials.filter(item => matchesCredentialSearch(item, credentialSearch) && matchesUploadFilter(item));
+  let filtered = latestCredentials.filter(item => matchesCredentialSearch(item, credentialSearch) && matchesUploadFilter(item));
+  if (!filtered.length && latestCredentials.length && (credentialSearch || credentialUploadFilter !== 'all')) {
+    credentialSearch = '';
+    credentialUploadFilter = 'all';
+    if (els.credentialSearchInput) els.credentialSearchInput.value = '';
+    if (els.credentialUploadFilter) els.credentialUploadFilter.value = 'all';
+    filtered = latestCredentials.slice();
+  }
   if (els.credentialStoreCount) els.credentialStoreCount.textContent = `仓库已有 ${latestCredentials.length} 个凭证`;
-  if (els.credentialStoreHint) els.credentialStoreHint.textContent = activeTarget ? `当前目标：${activeTarget.name} · ${filtered.length === latestCredentials.length ? `显示 ${filtered.length} 个` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个`}` : (filtered.length === latestCredentials.length ? `当前显示 ${filtered.length} 个` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个`);
+  if (els.credentialStoreHint) els.credentialStoreHint.textContent = activeTarget ? `当前目标：${activeTarget.name} · ${filtered.length === latestCredentials.length ? `显示 ${filtered.length} 个凭证` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个凭证`}` : (filtered.length === latestCredentials.length ? `当前显示 ${filtered.length} 个凭证` : `筛选后 ${filtered.length} / ${latestCredentials.length} 个凭证`);
   if (els.toggleCredentialFoldBtn) els.toggleCredentialFoldBtn.textContent = credentialStoreExpanded ? '折叠' : '展开';
   els.credentialStoreList?.classList.toggle('credential-store-folded', !credentialStoreExpanded);
   els.credentialStoreList?.classList.toggle('credential-store-expanded', credentialStoreExpanded);
