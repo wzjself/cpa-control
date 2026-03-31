@@ -1,4 +1,4 @@
-# serverhub
+# cpa-control
 
 一个用于服务器状态、CPA 管理、凭证仓库管理的 Flask 项目。
 
@@ -19,8 +19,8 @@ python3 -m venv .venv
 ## 部署到另一台服务器
 
 ```bash
-git clone <YOUR_GITHUB_REPO> serverhub
-cd serverhub
+git clone <YOUR_GITHUB_REPO> cpa-control
+cd cpa-control
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python app.py
