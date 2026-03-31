@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from email.utils import parsedate_to_datetime
 
 from flask import Flask, jsonify, render_template, request, Response
 import requests
@@ -33,6 +34,7 @@ RETENTION_DAYS = 30
 PORT = int(os.environ.get("SERVERHUB_PORT", "8321"))
 HOST = os.environ.get("SERVERHUB_HOST", "0.0.0.0")
 WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+KEEPALIVE_DEFAULT_DAYS = 15
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -91,6 +93,8 @@ def init_db() -> None:
             provider TEXT NOT NULL DEFAULT 'codex',
             sort_order INTEGER NOT NULL DEFAULT 0,
             expanded INTEGER NOT NULL DEFAULT 0,
+            keepalive_enabled INTEGER NOT NULL DEFAULT 0,
+            keepalive_days INTEGER NOT NULL DEFAULT 15,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -115,6 +119,8 @@ def init_db() -> None:
     cpa_cols = [r[1] for r in conn.execute("PRAGMA table_info(cpa_targets)").fetchall()]
     if 'sort_order' not in cpa_cols: conn.execute("ALTER TABLE cpa_targets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
     if 'expanded' not in cpa_cols: conn.execute("ALTER TABLE cpa_targets ADD COLUMN expanded INTEGER NOT NULL DEFAULT 0")
+    if 'keepalive_enabled' not in cpa_cols: conn.execute("ALTER TABLE cpa_targets ADD COLUMN keepalive_enabled INTEGER NOT NULL DEFAULT 0")
+    if 'keepalive_days' not in cpa_cols: conn.execute(f"ALTER TABLE cpa_targets ADD COLUMN keepalive_days INTEGER NOT NULL DEFAULT {KEEPALIVE_DEFAULT_DAYS}")
     conn.execute("UPDATE cpa_targets SET sort_order = rowid WHERE sort_order = 0 OR sort_order IS NULL")
     cols = [r[1] for r in conn.execute("PRAGMA table_info(credential_store)").fetchall()]
     if 'uploaded_to_cpa' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN uploaded_to_cpa INTEGER NOT NULL DEFAULT 0")
@@ -458,6 +464,60 @@ def normalize_credential_name(value: str) -> str:
             raw = raw[:-len(suffix)]
             break
     return raw
+
+
+def parse_any_dt(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        if text.endswith('Z'):
+            return datetime.fromisoformat(text.replace('Z', '+00:00'))
+        return datetime.fromisoformat(text)
+    except Exception:
+        pass
+    try:
+        return parsedate_to_datetime(text)
+    except Exception:
+        return None
+
+
+def get_usage_last_seen_map() -> dict[str, str]:
+    if not CLIRELAY_DB.exists():
+        return {}
+    conn = sqlite3.connect(CLIRELAY_DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT auth_index, MAX(timestamp) AS last_seen_at FROM request_logs WHERE auth_index != '' GROUP BY auth_index"
+    ).fetchall()
+    conn.close()
+    return {str(r['auth_index']): str(r['last_seen_at']) for r in rows if r['auth_index'] and r['last_seen_at']}
+
+
+def get_keepalive_days(target: dict[str, Any]) -> int:
+    try:
+        return max(1, int(target.get('keepalive_days') or KEEPALIVE_DEFAULT_DAYS))
+    except Exception:
+        return KEEPALIVE_DEFAULT_DAYS
+
+
+def get_keepalive_candidates(target: dict[str, Any], accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    threshold_days = get_keepalive_days(target)
+    now_dt = utc_now()
+    candidates = []
+    for acc in accounts:
+        if acc.get('invalid_401') or acc.get('quota_limited') or acc.get('disabled'):
+            continue
+        last_real_dt = parse_any_dt(acc.get('last_real_used_at'))
+        age_days = None
+        if last_real_dt:
+            age_days = max(0.0, (now_dt - last_real_dt.astimezone(timezone.utc)).total_seconds() / 86400.0)
+        stale = last_real_dt is None or age_days >= threshold_days
+        if stale:
+            candidates.append(acc)
+    return candidates
 
 
 def list_credentials() -> list[dict[str, Any]]:
@@ -840,6 +900,43 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
     return merged
 
 
+def run_keepalive_probe(target: dict[str, Any], account: dict[str, Any]) -> dict[str, Any]:
+    auth_index = str(account.get('auth_index') or '').strip()
+    id_token = account.get('id_token') or {}
+    account_id = str(id_token.get('chatgpt_account_id') or account.get('chatgpt_account_id') or '').strip()
+    if not auth_index or not account_id:
+        return {'ok': False, 'error': '缺少 auth_index 或 chatgpt_account_id'}
+    payload = {
+        'authIndex': auth_index,
+        'method': 'POST',
+        'url': 'https://chatgpt.com/backend-api/codex/responses',
+        'header': {
+            'Authorization': 'Bearer $TOKEN$',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+            'Chatgpt-Account-Id': account_id,
+        },
+        'body': json.dumps({
+            'model': 'gpt-4.1-mini',
+            'input': 'ping',
+            'max_output_tokens': 1,
+        }, ensure_ascii=False),
+    }
+    url = f"{target['base_url'].rstrip('/')}/v0/management/api-call"
+    r = requests.post(url, headers=mgmt_headers(target['token'], include_json=True), json=payload, timeout=40)
+    r.raise_for_status()
+    outer = r.json() if r.content else {}
+    status_code = outer.get('status_code') if isinstance(outer, dict) else None
+    body = outer.get('body') if isinstance(outer, dict) else None
+    text = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)[:500]
+    return {
+        'ok': bool(status_code and int(status_code) < 500),
+        'status_code': status_code,
+        'detail': text,
+        'probed_at': now_iso(),
+    }
+
+
 def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
     if not live:
         snapshot = load_cpa_snapshot(target['id'])
@@ -850,13 +947,24 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
             snapshot['provider'] = target['provider']
             snapshot['sort_order'] = int(target.get('sort_order') or 0)
             snapshot['expanded'] = bool(target.get('expanded'))
+            snapshot['keepalive_enabled'] = bool(target.get('keepalive_enabled'))
+            snapshot['keepalive_days'] = get_keepalive_days(target)
+            usage_last_seen = get_usage_last_seen_map()
             accounts = snapshot.get('accounts') or []
+            for acc in accounts:
+                auth_index = str(acc.get('auth_index') or '').strip()
+                last_real_used_at = usage_last_seen.get(auth_index)
+                acc['last_real_used_at'] = last_real_used_at
+                last_real_dt = parse_any_dt(last_real_used_at)
+                acc['stale_days_threshold'] = get_keepalive_days(target)
+                acc['stale_for_keepalive'] = (last_real_dt is None) or ((utc_now() - last_real_dt.astimezone(timezone.utc)).total_seconds() >= get_keepalive_days(target) * 86400)
             snapshot['total'] = len(accounts)
             snapshot['invalid_401'] = sum(1 for r in accounts if r.get('invalid_401'))
             snapshot['quota_limited'] = sum(1 for r in accounts if r.get('quota_limited'))
             snapshot['abnormal'] = sum(1 for r in accounts if (not r.get('invalid_401')) and (not r.get('quota_limited')) and str(r.get('status') or '').lower() in {'error', 'exception', 'abnormal', 'unknown'})
             snapshot['disabled'] = sum(1 for r in accounts if r.get('disabled'))
             snapshot['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited') and not r.get('disabled') and str(r.get('status') or '').lower() not in {'error', 'exception', 'abnormal', 'unknown'})
+            snapshot['keepalive_due'] = sum(1 for r in accounts if r.get('stale_for_keepalive'))
             usage_stats = get_cpa_usage_stats(target)
             snapshot['request_count'] = usage_stats['request_count']
             snapshot['total_tokens'] = usage_stats['total_tokens']
@@ -867,15 +975,30 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'sort_order': int(target.get('sort_order') or 0),
         'expanded': bool(target.get('expanded')),
+        'keepalive_enabled': bool(target.get('keepalive_enabled')),
+        'keepalive_days': get_keepalive_days(target),
+        'keepalive_due': 0,
         'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'abnormal': 0, 'disabled': 0, 'healthy': 0,
         'used_ratio': None, 'remaining_ratio': None, 'accounts': [], 'last_run': None,
     }
     accounts: list[dict[str, Any]] = []
     warden_map = load_cpa_warden_accounts(target)
+    usage_last_seen = get_usage_last_seen_map()
     if live:
         try:
-            files = hydrate_live_quota(target, fetch_cpa_auth_files(target))
-            live_accounts = [classify_cpa_file(item) for item in files]
+            raw_files = fetch_cpa_auth_files(target)
+            hydrated = hydrate_live_quota(target, raw_files)
+            live_accounts = []
+            for raw in hydrated:
+                item = classify_cpa_file(raw)
+                item['auth_index'] = str(raw.get('auth_index') or '').strip()
+                item['chatgpt_account_id'] = str(((raw.get('id_token') or {}).get('chatgpt_account_id')) or raw.get('chatgpt_account_id') or '').strip()
+                item['id_token'] = raw.get('id_token') or {}
+                item['last_real_used_at'] = usage_last_seen.get(item['auth_index'])
+                last_real_dt = parse_any_dt(item.get('last_real_used_at'))
+                item['stale_days_threshold'] = get_keepalive_days(target)
+                item['stale_for_keepalive'] = (last_real_dt is None) or ((utc_now() - last_real_dt.astimezone(timezone.utc)).total_seconds() >= get_keepalive_days(target) * 86400)
+                live_accounts.append(item)
             accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
             summary['last_run'] = {
                 'source': 'management-auth-files+warden-db',
@@ -902,8 +1025,15 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
                 'status': r.get('status') or 'unknown',
                 'status_message': r.get('status_message') or '',
                 'plan_type': str(r.get('usage_plan_type') or r.get('id_token_plan_type') or 'unknown').lower(),
+                'auth_index': str(r.get('auth_index') or ''),
+                'chatgpt_account_id': str(r.get('chatgpt_account_id') or ''),
+                'last_real_used_at': usage_last_seen.get(str(r.get('auth_index') or '')),
                 'source': 'warden-db',
             } for r in rows]
+            for item in db_accounts:
+                last_real_dt = parse_any_dt(item.get('last_real_used_at'))
+                item['stale_days_threshold'] = get_keepalive_days(target)
+                item['stale_for_keepalive'] = (last_real_dt is None) or ((utc_now() - last_real_dt.astimezone(timezone.utc)).total_seconds() >= get_keepalive_days(target) * 86400)
             accounts = db_accounts
             run = cur.execute("SELECT * FROM scan_runs ORDER BY run_id DESC LIMIT 1").fetchone()
             if run:
@@ -930,6 +1060,7 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
         summary['abnormal'] = sum(1 for r in accounts if (not r.get('invalid_401')) and (not r.get('quota_limited')) and str(r.get('status') or '').lower() in {'error', 'exception', 'abnormal', 'unknown'})
         summary['disabled'] = sum(1 for r in accounts if r.get('disabled'))
         summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited') and not r.get('disabled') and str(r.get('status') or '').lower() not in {'error', 'exception', 'abnormal', 'unknown'})
+        summary['keepalive_due'] = sum(1 for r in accounts if r.get('stale_for_keepalive'))
         remaining_values = [float(r.get('remaining_ratio')) for r in accounts if r.get('remaining_ratio') is not None]
         if remaining_values:
             summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
@@ -1026,13 +1157,15 @@ def api_add_cpa():
         'provider': (data.get('provider') or 'codex').strip() or 'codex',
         'sort_order': int(max_sort) + 1,
         'expanded': 0,
+        'keepalive_enabled': 0,
+        'keepalive_days': KEEPALIVE_DEFAULT_DAYS,
         'created_at': now_iso(),
         'updated_at': now_iso(),
     }
     if not row['base_url'] or not row['token']:
         return jsonify({'error': '缺少 base_url 或 token'}), 400
     conn.execute(
-        'INSERT INTO cpa_targets (id, name, base_url, token, provider, sort_order, expanded, created_at, updated_at) VALUES (:id,:name,:base_url,:token,:provider,:sort_order,:expanded,:created_at,:updated_at)',
+        'INSERT INTO cpa_targets (id, name, base_url, token, provider, sort_order, expanded, keepalive_enabled, keepalive_days, created_at, updated_at) VALUES (:id,:name,:base_url,:token,:provider,:sort_order,:expanded,:keepalive_enabled,:keepalive_days,:created_at,:updated_at)',
         row,
     )
     conn.commit()
@@ -1055,6 +1188,16 @@ def api_update_cpa(cpa_id: str):
     if 'expanded' in data:
         fields.append('expanded = ?')
         params.append(1 if bool(data.get('expanded')) else 0)
+    if 'keepalive_enabled' in data:
+        fields.append('keepalive_enabled = ?')
+        params.append(1 if bool(data.get('keepalive_enabled')) else 0)
+    if 'keepalive_days' in data:
+        try:
+            keepalive_days = max(1, int(data.get('keepalive_days') or KEEPALIVE_DEFAULT_DAYS))
+        except Exception:
+            return jsonify({'error': 'keepalive_days 非法'}), 400
+        fields.append('keepalive_days = ?')
+        params.append(keepalive_days)
     if not fields:
         return jsonify({'error': '没有可更新字段'}), 400
     fields.append('updated_at = ?')
@@ -1213,6 +1356,30 @@ def api_refresh_cpa(cpa_id: str):
     except Exception as exc:
         return jsonify({'error': str(exc), 'cpa': cpa_summary(target, live=False)}), 500
     return jsonify({'ok': True, 'scan': scan_result, 'cpa': cpa_summary(target, live=True)})
+
+
+@app.post('/api/cpas/<cpa_id>/keepalive-probe')
+def api_keepalive_probe(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    summary = cpa_summary(target, live=True)
+    candidates = get_keepalive_candidates(target, summary.get('accounts') or [])
+    if not candidates:
+        return jsonify({'ok': True, 'message': '没有需要保活的凭证', 'results': [], 'cpa': summary})
+    results = []
+    for acc in candidates[:5]:
+        try:
+            res = run_keepalive_probe(target, acc)
+        except Exception as exc:
+            res = {'ok': False, 'error': str(exc)}
+        results.append({
+            'name': acc.get('name') or acc.get('email'),
+            'email': acc.get('email'),
+            **res,
+        })
+    refreshed = cpa_summary(target, live=True)
+    return jsonify({'ok': True, 'results': results, 'cpa': refreshed})
 
 
 @app.delete('/api/cpas/<cpa_id>/auth-files/<path:file_name>')
