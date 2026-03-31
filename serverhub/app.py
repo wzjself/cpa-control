@@ -1245,7 +1245,7 @@ def api_scan_cpas():
 
 @app.get('/api/credentials')
 def api_list_credentials():
-    cleanup_duplicate_credentials()
+    dedupe = cleanup_duplicate_credentials()
     cpas = load_cpas()
     cpa_map = {c['id']: c for c in cpas}
     presence_map = build_credential_cpa_presence(cpas)
@@ -1257,7 +1257,7 @@ def api_list_credentials():
         raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
         item['present_in_cpas'] = presence_map.get(raw, [])
         credentials.append(item)
-    return jsonify({'credentials': credentials, 'cpas': cpas})
+    return jsonify({'credentials': credentials, 'cpas': cpas, 'dedupe_removed': dedupe.get('removed', 0)})
 
 
 @app.post('/api/credentials/import')
@@ -1270,7 +1270,7 @@ def api_import_credentials():
     saved = []
     skipped = []
     now = now_iso()
-    cleanup_duplicate_credentials(conn)
+    dedupe = cleanup_duplicate_credentials(conn)
     existing_rows = [dict(r) for r in conn.execute("SELECT name, filename FROM credential_store WHERE archived = 0").fetchall()]
     existing_keys = {credential_dedupe_key(r) for r in existing_rows if credential_dedupe_key(r)}
     for item in items:
@@ -1305,7 +1305,7 @@ def api_import_credentials():
         saved.append({'id': cred_id, 'name': name, 'filename': filename})
     conn.commit()
     conn.close()
-    return jsonify({'saved': saved, 'skipped': skipped, 'credentials': list_credentials()})
+    return jsonify({'saved': saved, 'skipped': skipped, 'dedupe_removed': dedupe.get('removed', 0), 'credentials': list_credentials()})
 
 
 @app.delete('/api/credentials/<cred_id>')
