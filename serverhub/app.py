@@ -577,6 +577,7 @@ def scan_cpa(target: dict[str, Any]) -> dict[str, Any]:
 
 def native_refresh_cpa(target: dict[str, Any]) -> dict[str, Any]:
     started = time.time()
+    refreshed_at = now_iso()
     warden_map = load_cpa_warden_accounts(target)
     t0 = time.time()
     raw_files = fetch_cpa_auth_files(target)
@@ -585,6 +586,8 @@ def native_refresh_cpa(target: dict[str, Any]) -> dict[str, Any]:
     t2 = time.time()
     live_accounts = [classify_cpa_file(raw) for raw in hydrated]
     accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
+    for acc in accounts:
+        acc['refreshed_at'] = refreshed_at
     summary = {
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'sort_order': int(target.get('sort_order') or 0),
