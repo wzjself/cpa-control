@@ -37,6 +37,7 @@ const els = {
   uploadCredentialFilesBtn: document.getElementById('uploadCredentialFilesBtn'),
   credentialStoreCount: document.getElementById('credentialStoreCount'),
   credentialStoreHint: document.getElementById('credentialStoreHint'),
+  autoRefreshHint: document.getElementById('autoRefreshHint'),
   toggleCredentialFoldBtn: document.getElementById('toggleCredentialFoldBtn'),
 };
 
@@ -199,23 +200,26 @@ els.uploadCredentialFilesBtn?.addEventListener('click', () => els.credentialFile
 els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(e.target.files, els.uploadCredentialFilesBtn));
 els.toggleCredentialFoldBtn?.addEventListener('click', () => { credentialStoreExpanded = !credentialStoreExpanded; renderCredentialStore(latestCredentials, latestCpas); });
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
+let autoRefreshRunning = false;
+async function runAutoRefreshCycle(forceBust = false) {
+  if (autoRefreshRunning) return;
+  autoRefreshRunning = true;
+  if (els.autoRefreshHint) els.autoRefreshHint.textContent = '自动刷新中...';
+  try {
+    await fetch('/api/cpas/scan', { method:'POST' });
+    await loadAll(forceBust);
+    await syncCredentialStatus({ silent: true, button: null });
+    if (els.autoRefreshHint) els.autoRefreshHint.textContent = `自动刷新成功 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
+  } catch (e) {
+    console.error('auto refresh failed', e);
+    if (els.autoRefreshHint) els.autoRefreshHint.textContent = '自动刷新失败';
+  } finally {
+    autoRefreshRunning = false;
+  }
+}
 loadAll(true);
-setTimeout(async () => {
-  try {
-    await fetch('/api/cpas/scan', { method:'POST' });
-    await loadAll(true);
-    await syncCredentialStatus({ silent: true, button: null });
-  } catch (e) {
-    console.error('initial auto refresh failed', e);
-  }
-}, 1200);
+window.addEventListener('load', () => {
+  setTimeout(() => { runAutoRefreshCycle(true); }, 1200);
+});
 setInterval(() => loadServerStatus(true), 1000);
-setInterval(async () => {
-  try {
-    await fetch('/api/cpas/scan', { method:'POST' });
-    await loadAll(false);
-    await syncCredentialStatus({ silent: true, button: null });
-  } catch (e) {
-    console.error('scheduled auto refresh failed', e);
-  }
-}, 180000);
+setInterval(() => { runAutoRefreshCycle(false); }, 180000);
