@@ -200,5 +200,22 @@ els.credentialFilesInput?.addEventListener('change', e => importCredentialFiles(
 els.toggleCredentialFoldBtn?.addEventListener('click', () => { credentialStoreExpanded = !credentialStoreExpanded; renderCredentialStore(latestCredentials, latestCpas); });
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
+setTimeout(async () => {
+  try {
+    await fetch('/api/cpas/scan', { method:'POST' });
+    await loadAll(true);
+    await syncCredentialStatus({ silent: true, button: null });
+  } catch (e) {
+    console.error('initial auto refresh failed', e);
+  }
+}, 1200);
 setInterval(() => loadServerStatus(true), 1000);
-setInterval(() => loadAll(false), 180000);
+setInterval(async () => {
+  try {
+    await fetch('/api/cpas/scan', { method:'POST' });
+    await loadAll(false);
+    await syncCredentialStatus({ silent: true, button: null });
+  } catch (e) {
+    console.error('scheduled auto refresh failed', e);
+  }
+}, 180000);

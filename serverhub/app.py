@@ -1191,8 +1191,23 @@ def api_delete_cpa(cpa_id: str):
 def api_scan_cpas():
     results = []
     for target in load_cpas():
-        result = scan_cpa(target)
-        results.append({'id': target['id'], 'name': target['name'], **result})
+        started = time.time()
+        try:
+            native = native_refresh_cpa(target)
+            results.append({
+                'id': target['id'],
+                'name': target['name'],
+                'mode': 'native-refresh',
+                'metrics': native.get('metrics', {}),
+                'elapsed_ms': int((time.time() - started) * 1000),
+            })
+        except Exception as exc:
+            results.append({
+                'id': target['id'],
+                'name': target['name'],
+                'error': str(exc),
+                'elapsed_ms': int((time.time() - started) * 1000),
+            })
     return jsonify({'results': results, 'cpas': [cpa_summary(t, live=False) for t in load_cpas()]})
 
 
