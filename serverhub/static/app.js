@@ -5,7 +5,7 @@ let credentialSearch = '';
 let credentialUploadFilter = 'all';
 let latestCredentials = [];
 let latestCpas = [];
-let credentialStoreExpanded = true;
+let credentialStoreExpanded = false;
 const recentlyHighlightedCredentialIds = new Set();
 
 const els = {
