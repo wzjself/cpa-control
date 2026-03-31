@@ -872,8 +872,8 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
     return merged
 
 
-def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
-    if not live:
+def cpa_summary(target: dict[str, Any], live: bool = False, prefer_snapshot: bool = True) -> dict[str, Any]:
+    if (not live) and prefer_snapshot:
         snapshot = load_cpa_snapshot(target['id'])
         if snapshot:
             snapshot['id'] = target['id']
@@ -1244,11 +1244,13 @@ def api_refresh_cpa(cpa_id: str):
     target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
     if not target:
         return jsonify({'error': 'CPA 不存在'}), 404
+    started = time.time()
     try:
         scan_result = scan_cpa(target)
     except Exception as exc:
-        return jsonify({'error': str(exc), 'cpa': cpa_summary(target, live=False)}), 500
-    return jsonify({'ok': True, 'scan': scan_result, 'cpa': cpa_summary(target, live=True)})
+        return jsonify({'error': str(exc), 'cpa': cpa_summary(target, live=False), 'elapsed_ms': int((time.time() - started) * 1000)}), 500
+    refreshed = cpa_summary(target, live=False)
+    return jsonify({'ok': True, 'scan': scan_result, 'cpa': refreshed, 'elapsed_ms': int((time.time() - started) * 1000)})
 
 
 @app.delete('/api/cpas/<cpa_id>/auth-files/<path:file_name>')
