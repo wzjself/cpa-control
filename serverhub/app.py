@@ -474,11 +474,9 @@ def list_credentials() -> list[dict[str, Any]]:
 def build_credential_cpa_presence(cpas: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     presence: dict[str, list[dict[str, Any]]] = {}
     for cpa in cpas:
-        try:
-            summary = cpa_summary(cpa)
-        except Exception:
-            continue
-        for acc in summary.get('accounts', []) or []:
+        snapshot = load_cpa_snapshot(str(cpa.get('id') or '')) or {}
+        accounts = snapshot.get('accounts') or []
+        for acc in accounts:
             key = normalize_credential_name(acc.get('email') or acc.get('name') or '')
             if not key:
                 continue
@@ -496,6 +494,7 @@ def build_credential_cpa_presence(cpas: list[dict[str, Any]]) -> dict[str, list[
                 'cpa_name': cpa.get('name'),
                 'status_text': status_text,
                 'good': good,
+                'snapshot_saved_at': snapshot.get('snapshot_saved_at'),
             })
     return presence
 
@@ -1379,21 +1378,12 @@ def api_sync_credential_upload_status():
     target = next((x for x in cpas if x['id'] == target_id), None)
     if not target:
         return jsonify({'error': '请先选择目标 CPA'}), 400
-    summary = cpa_summary(target)
+    presence_map = build_credential_cpa_presence(cpas)
     account_map = {}
-    for acc in summary.get('accounts', []):
-        key = normalize_credential_name(acc.get('email') or acc.get('name') or '')
-        if key:
-            if acc.get('invalid_401'):
-                status_text = '401失效'
-                detail = '401'
-            elif acc.get('quota_limited') or str(acc.get('status') or '').lower() == 'active':
-                status_text = '可用 / 限额'
-                detail = ''
-            else:
-                status_text = '异常'
-                detail = str(acc.get('status_message') or acc.get('status') or '未知异常')
-            account_map[key] = {'good': status_text == '可用 / 限额', 'status_text': status_text, 'detail': detail}
+    for key, items in presence_map.items():
+        hit = next((x for x in items if str(x.get('cpa_id')) == target_id), None)
+        if hit:
+            account_map[key] = {'good': bool(hit.get('good')), 'status_text': str(hit.get('status_text') or ''), 'detail': ''}
     matched = 0
     conn = get_conn()
     creds = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
@@ -1408,7 +1398,6 @@ def api_sync_credential_upload_status():
             conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', ('', '', now, row['id']))
     conn.commit()
     conn.close()
-    presence_map = build_credential_cpa_presence(cpas)
     credentials = []
     cpa_map = {c['id']: c for c in cpas}
     for item in list_credentials():
@@ -1418,7 +1407,7 @@ def api_sync_credential_upload_status():
         raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
         item['present_in_cpas'] = presence_map.get(raw, [])
         credentials.append(item)
-    return jsonify({'ok': True, 'matched': matched, 'credentials': credentials, 'cpas': cpas})
+    return jsonify({'ok': True, 'matched': matched, 'credentials': credentials, 'cpas': cpas, 'mode': 'snapshot-cache'})
 
 @app.get('/api/history')
 def api_history():
