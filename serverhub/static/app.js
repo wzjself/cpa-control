@@ -79,8 +79,11 @@ function matchesCredentialSearch(item, keyword) {
   return [item.name, item.filename, item.note, item.tags, item.last_target_name].some(x => String(x || '').toLowerCase().includes(q));
 }
 function matchesUploadFilter(item) {
-  if (credentialUploadFilter === 'uploaded') return Boolean(item.uploaded_to_cpa);
-  if (credentialUploadFilter === 'pending') return !item.uploaded_to_cpa;
+  const activeTargetId = els.credentialTargetSelect?.value || '';
+  const presentIn = Array.isArray(item?.present_in_cpas) ? item.present_in_cpas : [];
+  const matchedCurrentTarget = activeTargetId ? presentIn.some(x => String(x?.cpa_id) === String(activeTargetId)) : Boolean(item.uploaded_to_cpa);
+  if (credentialUploadFilter === 'uploaded') return matchedCurrentTarget;
+  if (credentialUploadFilter === 'pending') return !matchedCurrentTarget;
   return true;
 }
 function accountStatusText(acc) {
