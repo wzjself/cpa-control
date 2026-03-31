@@ -653,6 +653,7 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
             remaining_ratio = round(float(ratio_value) * 100, 2)
         except Exception:
             remaining_ratio = None
+    refresh_time = item.get('quota_checked_at') or item.get('last_refresh') or item.get('modtime') or item.get('created_at')
     return {
         'name': item.get('name') or item.get('id'),
         'email': item.get('email') or item.get('account') or item.get('label') or item.get('name'),
@@ -666,7 +667,7 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
         'api_status_code': api_status_code,
         'usage_limit_reached': item.get('usage_limit_reached'),
         'quota_signal_source': item.get('quota_signal_source'),
-        'quota_checked_at': item.get('quota_checked_at'),
+        'quota_checked_at': refresh_time,
         'source': 'management-auth-files',
     }
 
@@ -745,6 +746,7 @@ def load_cpa_warden_accounts(target: dict[str, Any]) -> dict[str, dict[str, Any]
             'usage_allowed': r.get('usage_allowed'),
             'usage_limit_reached': r.get('usage_limit_reached'),
             'quota_signal_source': r.get('quota_signal_source'),
+            'quota_checked_at': r.get('auth_last_refresh') or r.get('last_probed_at') or r.get('updated_at') or r.get('auth_modtime') or r.get('auth_updated_at'),
             'source': 'warden-db',
         }
     return out
@@ -784,6 +786,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             remaining_ratio = 0.0
         status = '401' if invalid_401 else 'limit' if quota_limited else (acc.get('status') or w.get('status') or (plan_type if plan_type != 'unknown' else 'unknown'))
         status_message = acc.get('status_message') or w.get('status_message') or ''
+        quota_checked_at = acc.get('quota_checked_at') or w.get('quota_checked_at')
 
         merged.append({
             'name': acc.get('name') or w.get('name'),
@@ -795,6 +798,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'status': status,
             'status_message': status_message,
             'plan_type': plan_type,
+            'quota_checked_at': quota_checked_at,
             'source': 'merged',
         })
         seen.update(acc_keys)
@@ -822,6 +826,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'status': '401' if invalid_401 else 'limit' if quota_limited else plan_type if plan_type != 'unknown' else (w.get('status') or 'unknown'),
             'status_message': w.get('status_message') or '',
             'plan_type': plan_type,
+            'quota_checked_at': w.get('quota_checked_at'),
             'source': 'warden-db-only',
         })
     return merged
