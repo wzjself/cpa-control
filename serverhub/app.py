@@ -87,6 +87,8 @@ def init_db() -> None:
             base_url TEXT NOT NULL,
             token TEXT NOT NULL,
             provider TEXT NOT NULL DEFAULT 'codex',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            expanded INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -108,6 +110,10 @@ def init_db() -> None:
         );
         """
     )
+    cpa_cols = [r[1] for r in conn.execute("PRAGMA table_info(cpa_targets)").fetchall()]
+    if 'sort_order' not in cpa_cols: conn.execute("ALTER TABLE cpa_targets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    if 'expanded' not in cpa_cols: conn.execute("ALTER TABLE cpa_targets ADD COLUMN expanded INTEGER NOT NULL DEFAULT 0")
+    conn.execute("UPDATE cpa_targets SET sort_order = rowid WHERE sort_order = 0 OR sort_order IS NULL")
     cols = [r[1] for r in conn.execute("PRAGMA table_info(credential_store)").fetchall()]
     if 'uploaded_to_cpa' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN uploaded_to_cpa INTEGER NOT NULL DEFAULT 0")
     if 'upload_status_text' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN upload_status_text TEXT NOT NULL DEFAULT ''")
@@ -438,7 +444,7 @@ def get_cpa_usage_stats(target: dict[str, Any]) -> dict[str, Any]:
 
 def load_cpas() -> list[dict[str, Any]]:
     conn = get_conn()
-    rows = [dict(r) for r in conn.execute("SELECT * FROM cpa_targets ORDER BY created_at DESC").fetchall()]
+    rows = [dict(r) for r in conn.execute("SELECT * FROM cpa_targets ORDER BY sort_order ASC, created_at DESC").fetchall()]
     conn.close()
     return rows
 
@@ -840,6 +846,8 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
             snapshot['name'] = target['name']
             snapshot['base_url'] = target['base_url']
             snapshot['provider'] = target['provider']
+            snapshot['sort_order'] = int(target.get('sort_order') or 0)
+            snapshot['expanded'] = bool(target.get('expanded'))
             usage_stats = get_cpa_usage_stats(target)
             snapshot['request_count'] = usage_stats['request_count']
             snapshot['total_tokens'] = usage_stats['total_tokens']
@@ -848,6 +856,8 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
 
     summary = {
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
+        'sort_order': int(target.get('sort_order') or 0),
+        'expanded': bool(target.get('expanded')),
         'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'disabled': 0, 'healthy': 0,
         'used_ratio': None, 'remaining_ratio': None, 'accounts': [], 'last_run': None,
     }
@@ -996,26 +1006,73 @@ def api_server_status():
 def api_add_cpa():
     data = request.get_json(force=True) or {}
     cpa_id = uuid.uuid4().hex[:12]
+    conn = get_conn()
+    max_sort = conn.execute('SELECT COALESCE(MAX(sort_order), 0) FROM cpa_targets').fetchone()[0] or 0
     row = {
         'id': cpa_id,
         'name': (data.get('name') or '未命名CPA').strip(),
         'base_url': (data.get('base_url') or '').strip().rstrip('/'),
         'token': (data.get('token') or '').strip(),
         'provider': (data.get('provider') or 'codex').strip() or 'codex',
+        'sort_order': int(max_sort) + 1,
+        'expanded': 0,
         'created_at': now_iso(),
         'updated_at': now_iso(),
     }
     if not row['base_url'] or not row['token']:
         return jsonify({'error': '缺少 base_url 或 token'}), 400
-    conn = get_conn()
     conn.execute(
-        'INSERT INTO cpa_targets (id, name, base_url, token, provider, created_at, updated_at) VALUES (:id,:name,:base_url,:token,:provider,:created_at,:updated_at)',
+        'INSERT INTO cpa_targets (id, name, base_url, token, provider, sort_order, expanded, created_at, updated_at) VALUES (:id,:name,:base_url,:token,:provider,:sort_order,:expanded,:created_at,:updated_at)',
         row,
     )
     conn.commit()
     conn.close()
     write_cpa_config(row)
     return jsonify(row), 201
+
+
+@app.patch('/api/cpas/<cpa_id>')
+def api_update_cpa(cpa_id: str):
+    data = request.get_json(force=True) or {}
+    fields = []
+    params: list[Any] = []
+    if 'name' in data:
+        name = str(data.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': '名称不能为空'}), 400
+        fields.append('name = ?')
+        params.append(name)
+    if 'expanded' in data:
+        fields.append('expanded = ?')
+        params.append(1 if bool(data.get('expanded')) else 0)
+    if not fields:
+        return jsonify({'error': '没有可更新字段'}), 400
+    fields.append('updated_at = ?')
+    params.append(now_iso())
+    params.append(cpa_id)
+    conn = get_conn()
+    conn.execute(f"UPDATE cpa_targets SET {', '.join(fields)} WHERE id = ?", tuple(params))
+    conn.commit()
+    row = conn.execute('SELECT * FROM cpa_targets WHERE id = ?', (cpa_id,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    target = dict(row)
+    return jsonify({'ok': True, 'cpa': cpa_summary(target, live=False)})
+
+
+@app.post('/api/cpas/reorder')
+def api_reorder_cpas():
+    data = request.get_json(force=True) or {}
+    ids = data.get('ids') or []
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'error': '缺少排序 ids'}), 400
+    conn = get_conn()
+    for idx, cpa_id in enumerate(ids, start=1):
+        conn.execute('UPDATE cpa_targets SET sort_order = ?, updated_at = ? WHERE id = ?', (idx, now_iso(), str(cpa_id)))
+    conn.commit()
+    conn.close()
+    return jsonify({'ok': True, 'cpas': [cpa_summary(t, live=False) for t in load_cpas()]})
 
 
 @app.delete('/api/cpas/<cpa_id>')
