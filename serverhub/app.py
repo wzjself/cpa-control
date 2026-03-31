@@ -575,6 +575,63 @@ def scan_cpa(target: dict[str, Any]) -> dict[str, Any]:
     return {'returncode': proc.returncode, 'stdout': proc.stdout[-4000:], 'stderr': proc.stderr[-4000:]}
 
 
+def native_refresh_cpa(target: dict[str, Any]) -> dict[str, Any]:
+    started = time.time()
+    warden_map = load_cpa_warden_accounts(target)
+    t0 = time.time()
+    raw_files = fetch_cpa_auth_files(target)
+    t1 = time.time()
+    hydrated = hydrate_live_quota(target, raw_files)
+    t2 = time.time()
+    live_accounts = [classify_cpa_file(raw) for raw in hydrated]
+    accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
+    summary = {
+        'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
+        'sort_order': int(target.get('sort_order') or 0),
+        'expanded': bool(target.get('expanded')),
+        'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'abnormal': 0, 'disabled': 0, 'healthy': 0,
+        'used_ratio': None, 'remaining_ratio': None, 'accounts': [],
+        'last_run': {
+            'source': 'native-management-auth-files+warden-db',
+            'count': len(accounts),
+            'live_count': len(live_accounts),
+            'warden_count': len(warden_map),
+        },
+    }
+    accounts.sort(key=lambda r: (
+        0 if r.get('invalid_401') else 1 if r.get('quota_limited') else 2 if r.get('disabled') else 3,
+        float(r.get('remaining_ratio') or 0),
+        str(r.get('email') or r.get('name') or ''),
+    ))
+    usage_stats = get_cpa_usage_stats(target)
+    summary['request_count'] = usage_stats['request_count']
+    summary['total_tokens'] = usage_stats['total_tokens']
+    summary['usage_matched_by'] = usage_stats['matched_by']
+    if accounts:
+        summary['total'] = len(accounts)
+        summary['invalid_401'] = sum(1 for r in accounts if r.get('invalid_401'))
+        summary['quota_limited'] = sum(1 for r in accounts if r.get('quota_limited'))
+        summary['abnormal'] = sum(1 for r in accounts if (not r.get('invalid_401')) and (not r.get('quota_limited')) and str(r.get('status') or '').lower() in {'error', 'exception', 'abnormal', 'unknown'})
+        summary['disabled'] = sum(1 for r in accounts if r.get('disabled'))
+        summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited') and not r.get('disabled') and str(r.get('status') or '').lower() not in {'error', 'exception', 'abnormal', 'unknown'})
+        remaining_values = [float(r.get('remaining_ratio')) for r in accounts if r.get('remaining_ratio') is not None]
+        if remaining_values:
+            summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
+            summary['used_ratio'] = round(100 - summary['remaining_ratio'], 2)
+        summary['accounts'] = accounts[:200]
+    save_cpa_snapshot(target['id'], summary)
+    return {
+        'summary': summary,
+        'metrics': {
+            'fetch_auth_files_ms': int((t1 - t0) * 1000),
+            'hydrate_usage_ms': int((t2 - t1) * 1000),
+            'total_ms': int((time.time() - started) * 1000),
+            'files': len(raw_files),
+            'accounts': len(accounts),
+        }
+    }
+
+
 def fetch_cpa_auth_files(target: dict[str, Any]) -> list[dict[str, Any]]:
     url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files"
     r = requests.get(url, headers=mgmt_headers(target['token']), timeout=30)
@@ -1246,11 +1303,10 @@ def api_refresh_cpa(cpa_id: str):
         return jsonify({'error': 'CPA 不存在'}), 404
     started = time.time()
     try:
-        scan_result = scan_cpa(target)
+        native = native_refresh_cpa(target)
     except Exception as exc:
         return jsonify({'error': str(exc), 'cpa': cpa_summary(target, live=False), 'elapsed_ms': int((time.time() - started) * 1000)}), 500
-    refreshed = cpa_summary(target, live=False)
-    return jsonify({'ok': True, 'scan': scan_result, 'cpa': refreshed, 'elapsed_ms': int((time.time() - started) * 1000)})
+    return jsonify({'ok': True, 'scan': {'mode': 'native-refresh', 'metrics': native.get('metrics', {})}, 'cpa': native.get('summary') or cpa_summary(target, live=False), 'elapsed_ms': int((time.time() - started) * 1000)})
 
 
 @app.delete('/api/cpas/<cpa_id>/auth-files/<path:file_name>')
