@@ -23,7 +23,7 @@ import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "cpa-control.db"
+DB_PATH = DATA_DIR / "serverhub.db"
 CPA_WARDEN_DIR = Path("/root/cpa-warden")
 CLIRELAY_DB = Path("/opt/clirelay/data/usage.db")
 CLIRELAY_BASE = os.environ.get("CLIRELAY_BASE", "http://127.0.0.1:8317")
