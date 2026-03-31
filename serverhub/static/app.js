@@ -182,4 +182,4 @@ els.toggleCredentialFoldBtn?.addEventListener('click', () => { credentialStoreEx
 els.timeRangeSwitch?.querySelectorAll('.range-btn').forEach(btn => btn.addEventListener('click', async () => { currentRange = btn.dataset.range || '24h'; await loadAll(true); }));
 loadAll(true);
 setInterval(() => loadServerStatus(true), 1000);
-setInterval(() => loadAll(true), 60000);
+setInterval(() => loadAll(false), 180000);
