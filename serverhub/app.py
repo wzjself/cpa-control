@@ -471,6 +471,35 @@ def list_credentials() -> list[dict[str, Any]]:
     return rows
 
 
+def build_credential_cpa_presence(cpas: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    presence: dict[str, list[dict[str, Any]]] = {}
+    for cpa in cpas:
+        try:
+            summary = cpa_summary(cpa)
+        except Exception:
+            continue
+        for acc in summary.get('accounts', []) or []:
+            key = normalize_credential_name(acc.get('email') or acc.get('name') or '')
+            if not key:
+                continue
+            if acc.get('invalid_401'):
+                status_text = '401失效'
+                good = False
+            elif acc.get('quota_limited') or str(acc.get('status') or '').lower() == 'active':
+                status_text = '可用 / 限额'
+                good = True
+            else:
+                status_text = '异常'
+                good = False
+            presence.setdefault(key, []).append({
+                'cpa_id': cpa.get('id'),
+                'cpa_name': cpa.get('name'),
+                'status_text': status_text,
+                'good': good,
+            })
+    return presence
+
+
 def cpa_config_path(cpa_id: str) -> Path:
     return DATA_DIR / f'cpa_{cpa_id}.json'
 
@@ -1116,11 +1145,14 @@ def api_scan_cpas():
 def api_list_credentials():
     cpas = load_cpas()
     cpa_map = {c['id']: c for c in cpas}
+    presence_map = build_credential_cpa_presence(cpas)
     credentials = []
     for item in list_credentials():
         item = dict(item)
         last_target = cpa_map.get(item.get('last_target_id'))
         item['last_target_name'] = last_target.get('name') if last_target else None
+        raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
+        item['present_in_cpas'] = presence_map.get(raw, [])
         credentials.append(item)
     return jsonify({'credentials': credentials, 'cpas': cpas})
 
@@ -1343,7 +1375,8 @@ def api_delete_cpa_accounts_by_kind(cpa_id: str, kind: str):
 def api_sync_credential_upload_status():
     data = request.get_json(silent=True) or {}
     target_id = str(data.get('target_id') or '').strip()
-    target = next((x for x in load_cpas() if x['id'] == target_id), None)
+    cpas = load_cpas()
+    target = next((x for x in cpas if x['id'] == target_id), None)
     if not target:
         return jsonify({'error': '请先选择目标 CPA'}), 400
     summary = cpa_summary(target)
@@ -1372,10 +1405,20 @@ def api_sync_credential_upload_status():
             matched += 1
             conn.execute('UPDATE credential_store SET uploaded_to_cpa = 1, last_target_id = ?, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (target_id, hit['status_text'], hit['detail'], now, row['id']))
         else:
-            pass
+            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', ('', '', now, row['id']))
     conn.commit()
     conn.close()
-    return jsonify({'ok': True, 'matched': matched, 'credentials': list_credentials(), 'cpas': load_cpas()})
+    presence_map = build_credential_cpa_presence(cpas)
+    credentials = []
+    cpa_map = {c['id']: c for c in cpas}
+    for item in list_credentials():
+        item = dict(item)
+        last_target = cpa_map.get(item.get('last_target_id'))
+        item['last_target_name'] = last_target.get('name') if last_target else None
+        raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
+        item['present_in_cpas'] = presence_map.get(raw, [])
+        credentials.append(item)
+    return jsonify({'ok': True, 'matched': matched, 'credentials': credentials, 'cpas': cpas})
 
 @app.get('/api/history')
 def api_history():
