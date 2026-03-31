@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -858,7 +858,7 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
         'id': target['id'], 'name': target['name'], 'base_url': target['base_url'], 'provider': target['provider'],
         'sort_order': int(target.get('sort_order') or 0),
         'expanded': bool(target.get('expanded')),
-        'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'disabled': 0, 'healthy': 0,
+        'total': 0, 'invalid_401': 0, 'quota_limited': 0, 'abnormal': 0, 'disabled': 0, 'healthy': 0,
         'used_ratio': None, 'remaining_ratio': None, 'accounts': [], 'last_run': None,
     }
     accounts: list[dict[str, Any]] = []
@@ -918,8 +918,9 @@ def cpa_summary(target: dict[str, Any], live: bool = False) -> dict[str, Any]:
         summary['total'] = len(accounts)
         summary['invalid_401'] = sum(1 for r in accounts if r.get('invalid_401'))
         summary['quota_limited'] = sum(1 for r in accounts if r.get('quota_limited'))
+        summary['abnormal'] = sum(1 for r in accounts if (not r.get('invalid_401')) and (not r.get('quota_limited')) and str(r.get('status') or '').lower() in {'error', 'exception', 'abnormal', 'unknown'})
         summary['disabled'] = sum(1 for r in accounts if r.get('disabled'))
-        summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited') and not r.get('disabled'))
+        summary['healthy'] = sum(1 for r in accounts if not r.get('invalid_401') and not r.get('quota_limited') and not r.get('disabled') and str(r.get('status') or '').lower() not in {'error', 'exception', 'abnormal', 'unknown'})
         remaining_values = [float(r.get('remaining_ratio')) for r in accounts if r.get('remaining_ratio') is not None]
         if remaining_values:
             summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
@@ -1220,6 +1221,16 @@ def api_delete_cpa_auth_file(cpa_id: str, file_name: str):
     return jsonify({'result': result, 'cpa': cpa_summary(target), 'credentials': list_credentials()}), code
 
 
+def match_account_by_kind(acc: dict[str, Any], kind: str) -> bool:
+    kind = str(kind or '').strip().lower()
+    status = str(acc.get('status') or '').lower()
+    if kind == '401':
+        return bool(acc.get('invalid_401'))
+    if kind == 'abnormal':
+        return (not acc.get('invalid_401')) and (not acc.get('quota_limited')) and status in {'error', 'exception', 'abnormal', 'unknown'}
+    return False
+
+
 @app.post('/api/cpas/<cpa_id>/delete-401')
 def api_delete_cpa_401(cpa_id: str):
     target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
@@ -1238,6 +1249,60 @@ def api_delete_cpa_401(cpa_id: str):
     return jsonify({'deleted': deleted, 'failed': failed, 'cpa': cpa_summary(target)})
 
 
+@app.get('/api/cpas/<cpa_id>/export/<kind>')
+def api_export_cpa_accounts(cpa_id: str, kind: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    if kind not in {'401', 'abnormal'}:
+        return jsonify({'error': '仅支持导出 abnormal 或 401'}), 400
+    summary = cpa_summary(target)
+    accounts = [
+        {
+            'name': acc.get('name'),
+            'email': acc.get('email'),
+            'status': acc.get('status'),
+            'status_message': acc.get('status_message'),
+            'remaining_ratio': acc.get('remaining_ratio'),
+            'quota_checked_at': acc.get('quota_checked_at'),
+        }
+        for acc in summary.get('accounts', []) if match_account_by_kind(acc, kind)
+    ]
+    payload = {
+        'exported_at': now_iso(),
+        'cpa_id': target['id'],
+        'cpa_name': target['name'],
+        'kind': kind,
+        'count': len(accounts),
+        'accounts': accounts,
+    }
+    filename = f"{target['name']}_{kind}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+    return Response(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        mimetype='application/json; charset=utf-8',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}"},
+    )
+
+
+@app.post('/api/cpas/<cpa_id>/delete/<kind>')
+def api_delete_cpa_accounts_by_kind(cpa_id: str, kind: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    if kind not in {'401', 'abnormal'}:
+        return jsonify({'error': '仅支持删除 abnormal 或 401'}), 400
+    summary = cpa_summary(target)
+    deleted = []
+    failed = []
+    for acc in summary.get('accounts', []):
+        if not match_account_by_kind(acc, kind):
+            continue
+        res = delete_cpa_auth_file(target, acc.get('name') or acc.get('email') or '')
+        if res.get('ok'):
+            deleted.append(acc.get('name') or acc.get('email'))
+        else:
+            failed.append({'account': acc.get('name') or acc.get('email'), 'result': res})
+    return jsonify({'kind': kind, 'deleted': deleted, 'failed': failed, 'cpa': cpa_summary(target), 'credentials': list_credentials()})
 
 
 @app.post('/api/credentials/sync-upload-status')
