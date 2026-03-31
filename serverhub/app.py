@@ -10,6 +10,8 @@ import subprocess
 import threading
 import time
 import uuid
+import io
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1264,29 +1266,49 @@ def api_export_cpa_accounts(cpa_id: str, kind: str):
     if kind not in {'401', 'abnormal'}:
         return jsonify({'error': '仅支持导出 abnormal 或 401'}), 400
     summary = cpa_summary(target)
-    accounts = [
-        {
-            'name': acc.get('name'),
-            'email': acc.get('email'),
-            'status': acc.get('status'),
-            'status_message': acc.get('status_message'),
-            'remaining_ratio': acc.get('remaining_ratio'),
-            'quota_checked_at': acc.get('quota_checked_at'),
-        }
-        for acc in summary.get('accounts', []) if match_account_by_kind(acc, kind)
-    ]
-    payload = {
-        'exported_at': now_iso(),
-        'cpa_id': target['id'],
-        'cpa_name': target['name'],
-        'kind': kind,
-        'count': len(accounts),
-        'accounts': accounts,
+    matched_accounts = [acc for acc in summary.get('accounts', []) if match_account_by_kind(acc, kind)]
+    matched_names = {
+        normalize_credential_name(acc.get('name') or acc.get('email') or '')
+        for acc in matched_accounts
+        if normalize_credential_name(acc.get('name') or acc.get('email') or '')
     }
-    filename = f"{target['name']}_{kind}_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.json"
+    credentials = []
+    for item in list_credentials():
+        raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
+        if raw in matched_names:
+            credentials.append(item)
+
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+        manifest = {
+            'exported_at': now_iso(),
+            'cpa_id': target['id'],
+            'cpa_name': target['name'],
+            'kind': kind,
+            'count': len(credentials),
+            'matched_accounts': len(matched_accounts),
+            'files': [],
+        }
+        used_names: set[str] = set()
+        for idx, item in enumerate(credentials, start=1):
+            base_name = str(item.get('filename') or item.get('name') or f'credential_{idx}.json').strip() or f'credential_{idx}.json'
+            safe_name = base_name.replace('..', '_').replace('/', '_')
+            if safe_name in used_names:
+                stem, dot, ext = safe_name.partition('.')
+                safe_name = f"{stem}_{idx}{dot}{ext}" if dot else f"{safe_name}_{idx}"
+            used_names.add(safe_name)
+            zf.writestr(safe_name, item.get('content') or '')
+            manifest['files'].append({
+                'id': item.get('id'),
+                'name': item.get('name'),
+                'filename': safe_name,
+            })
+        zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+    mem.seek(0)
+    filename = f"{target['name']}_{kind}_credentials_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.zip"
     return Response(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        mimetype='application/json; charset=utf-8',
+        mem.getvalue(),
+        mimetype='application/zip',
         headers={'Content-Disposition': f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}"},
     )
 
