@@ -1257,7 +1257,7 @@ def api_list_credentials():
         raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
         item['present_in_cpas'] = presence_map.get(raw, [])
         credentials.append(item)
-    return jsonify({'credentials': credentials, 'cpas': cpas, 'dedupe_removed': dedupe.get('removed', 0)})
+    return jsonify({'credentials': credentials, 'cpas': cpas, 'dedupe_removed': int((dedupe or {}).get('removed') or 0)})
 
 
 @app.post('/api/credentials/import')
