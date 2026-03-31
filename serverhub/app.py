@@ -471,6 +471,34 @@ def list_credentials() -> list[dict[str, Any]]:
     return rows
 
 
+def credential_dedupe_key(item: dict[str, Any]) -> str:
+    return normalize_credential_name(str(item.get('name') or item.get('filename') or ''))
+
+
+def cleanup_duplicate_credentials(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    own_conn = False
+    if conn is None:
+        conn = get_conn()
+        own_conn = True
+    rows = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC, updated_at DESC, id DESC").fetchall()]
+    keep_seen = set()
+    removed_ids = []
+    now = now_iso()
+    for row in rows:
+        key = credential_dedupe_key(row)
+        if not key:
+            continue
+        if key in keep_seen:
+            conn.execute('UPDATE credential_store SET archived = 1, updated_at = ? WHERE id = ?', (now, row['id']))
+            removed_ids.append(row['id'])
+        else:
+            keep_seen.add(key)
+    if own_conn:
+        conn.commit()
+        conn.close()
+    return {'removed': len(removed_ids), 'removed_ids': removed_ids}
+
+
 def build_credential_cpa_presence(cpas: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     presence: dict[str, list[dict[str, Any]]] = {}
     for cpa in cpas:
@@ -1217,6 +1245,7 @@ def api_scan_cpas():
 
 @app.get('/api/credentials')
 def api_list_credentials():
+    cleanup_duplicate_credentials()
     cpas = load_cpas()
     cpa_map = {c['id']: c for c in cpas}
     presence_map = build_credential_cpa_presence(cpas)
@@ -1239,7 +1268,11 @@ def api_import_credentials():
         return jsonify({'error': '没有可导入的凭证'}), 400
     conn = get_conn()
     saved = []
+    skipped = []
     now = now_iso()
+    cleanup_duplicate_credentials(conn)
+    existing_rows = [dict(r) for r in conn.execute("SELECT name, filename FROM credential_store WHERE archived = 0").fetchall()]
+    existing_keys = {credential_dedupe_key(r) for r in existing_rows if credential_dedupe_key(r)}
     for item in items:
         content = str(item.get('content') or '').strip()
         if not content:
@@ -1247,6 +1280,10 @@ def api_import_credentials():
         cred_id = uuid.uuid4().hex[:16]
         filename = str(item.get('filename') or item.get('name') or f'{cred_id}.json').strip()
         name = str(item.get('name') or filename).strip()
+        dedupe_key = credential_dedupe_key({'name': name, 'filename': filename})
+        if dedupe_key and dedupe_key in existing_keys:
+            skipped.append({'name': name, 'filename': filename, 'reason': 'duplicate_name'})
+            continue
         row = {
             'id': cred_id,
             'name': name,
@@ -1264,10 +1301,11 @@ def api_import_credentials():
             'archived': 0,
         }
         conn.execute('INSERT INTO credential_store (id,name,filename,content,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,uploaded_to_cpa,upload_status_text,upload_error_detail,archived) VALUES (:id,:name,:filename,:content,:note,:tags,:uploaded_at,:updated_at,:last_used_at,:last_target_id,:uploaded_to_cpa,:upload_status_text,:upload_error_detail,:archived)', row)
+        existing_keys.add(dedupe_key)
         saved.append({'id': cred_id, 'name': name, 'filename': filename})
     conn.commit()
     conn.close()
-    return jsonify({'saved': saved, 'credentials': list_credentials()})
+    return jsonify({'saved': saved, 'skipped': skipped, 'credentials': list_credentials()})
 
 
 @app.delete('/api/credentials/<cred_id>')
