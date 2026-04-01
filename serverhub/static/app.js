@@ -76,20 +76,26 @@ function withButtonLoading(button, loadingText, fn) {
   };
 }
 function cpaAuthKey(cpaId, name) { return `${cpaId}::${decodeURIComponent(String(name || ''))}`; }
-function updateSelectedCpaAuthMeta() {
-  document.querySelectorAll('.cpa-card').forEach(card => {
-    const cpaId = card.dataset.cpaId || '';
-    const count = Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${cpaId}::`)).length;
+function refreshCpaCardSelectionUi(cpaId = '') {
+  const cards = cpaId ? Array.from(document.querySelectorAll(`.cpa-card[data-cpa-id="${cpaId}"]`)) : Array.from(document.querySelectorAll('.cpa-card'));
+  cards.forEach(card => {
+    const currentId = card.dataset.cpaId || '';
+    const count = Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${currentId}::`)).length;
     const countEl = card.querySelector('.selected-cpa-auth-count');
     const hintEl = card.querySelector('.selected-cpa-auth-hint');
     if (countEl) countEl.textContent = `已选择 ${count} 个凭证`;
     if (hintEl) hintEl.textContent = count ? '下一步：删除 / 上传仓库 / 下载凭证文件' : '可选择全部 / 异常 / 401';
+    card.querySelectorAll('.account-pick input[type="checkbox"]').forEach(box => {
+      const encodedName = box.dataset.encodedName || '';
+      box.checked = selectedCpaAuthIds.has(cpaAuthKey(currentId, encodedName));
+    });
   });
 }
+function updateSelectedCpaAuthMeta() { refreshCpaCardSelectionUi(''); }
 function toggleCpaAuthSelect(cpaId, encodedName, checked) {
   const key = cpaAuthKey(cpaId, encodedName);
   if (checked) selectedCpaAuthIds.add(key); else selectedCpaAuthIds.delete(key);
-  updateSelectedCpaAuthMeta();
+  refreshCpaCardSelectionUi(cpaId);
 }
 function getSelectedCpaAuthItems(cpaId = '') {
   return Array.from(selectedCpaAuthIds).map(key => { const [id, ...rest] = key.split('::'); return { cpa_id: id, file_name: rest.join('::') }; }).filter(x => x.cpa_id && x.file_name && (!cpaId || String(x.cpa_id) === String(cpaId)));
@@ -108,8 +114,7 @@ function selectCpaAuthsByMode(cpaId, mode) {
     const shouldPick = mode === 'all' ? true : mode === '401' ? kind === '401' : mode === 'abnormal' ? kind === 'abnormal' : false;
     if (shouldPick) selectedCpaAuthIds.add(cpaAuthKey(cpaId, encodeURIComponent(acc.name || acc.email || '')));
   });
-  updateSelectedCpaAuthMeta();
-  renderCpas(latestCpas);
+  refreshCpaCardSelectionUi(cpaId);
 }
 function matchesCredentialSearch(item, keyword) {
   const q = String(keyword || '').trim().toLowerCase();
@@ -214,7 +219,7 @@ function renderCpaCard(cpa) {
     const checked = selectedCpaAuthIds.has(cpaAuthKey(cpa.id, encodedName));
     return `<div class="account-chip">
       <label class="account-pick">
-        <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleCpaAuthSelect('${cpa.id}', '${encodedName}', this.checked)">
+        <input type="checkbox" data-encoded-name="${encodedName}" ${checked ? 'checked' : ''} onchange="toggleCpaAuthSelect('${cpa.id}', '${encodedName}', this.checked)">
       </label>
       <div class="account-chip-top"><strong title="${esc(acc.email || acc.name)}">${esc(acc.email || acc.name)}</strong><span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span></div>
       <div class="progress mini-remain"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
