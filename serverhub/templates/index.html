@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>服务器总览</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260401cpa24">
-  <script src="/static/vendor/chart.umd.js?v=20260401cpa24"></script>
+  <link rel="stylesheet" href="/static/style.css?v=20260401cpa25">
+  <script src="/static/vendor/chart.umd.js?v=20260401cpa25"></script>
 </head>
 <body>
   <div class="container">
@@ -94,19 +94,7 @@
           <p>直接读取 CPA 后台 auth-files 状态，区分 limit 与 401</p>
         </div>
         <div class="cpa-actions">
-          <button id="selectAllCpaAuthsBtn" type="button" class="ghost">选择全部</button>
-          <button id="selectAbnormalCpaAuthsBtn" type="button" class="ghost">选择异常</button>
-          <button id="select401CpaAuthsBtn" type="button" class="ghost">选择401</button>
-          <button id="saveSelectedCpaAuthsBtn" type="button">上传仓库</button>
-          <button id="exportSelectedCpaAuthsBtn" type="button">下载凭证文件</button>
-          <button id="deleteSelectedCpaAuthsBtn" type="button" class="danger">删除</button>
           <button id="scanCpasBtn">刷新并扫描全部 CPA</button>
-        </div>
-      </div>
-      <div class="credential-store-head" style="margin-top:-4px;margin-bottom:12px;">
-        <strong id="selectedCpaAuthCount">已选择 0 个 CPA 凭证</strong>
-        <div class="credential-store-tools">
-          <span class="muted" id="selectedCpaAuthHint">可选择全部 / 异常 / 401，再统一处理</span>
         </div>
       </div>
 
@@ -122,6 +110,6 @@
     </section>
 
   </div>
-  <script src="/static/app.js?v=20260401cpa24"></script>
+  <script src="/static/app.js?v=20260401cpa25"></script>
 </body>
 </html>

@@ -40,14 +40,6 @@ const els = {
   credentialStoreHint: document.getElementById('credentialStoreHint'),
   autoRefreshHint: document.getElementById('autoRefreshHint'),
   toggleCredentialFoldBtn: document.getElementById('toggleCredentialFoldBtn'),
-  saveSelectedCpaAuthsBtn: document.getElementById('saveSelectedCpaAuthsBtn'),
-  exportSelectedCpaAuthsBtn: document.getElementById('exportSelectedCpaAuthsBtn'),
-  deleteSelectedCpaAuthsBtn: document.getElementById('deleteSelectedCpaAuthsBtn'),
-  selectAllCpaAuthsBtn: document.getElementById('selectAllCpaAuthsBtn'),
-  selectAbnormalCpaAuthsBtn: document.getElementById('selectAbnormalCpaAuthsBtn'),
-  select401CpaAuthsBtn: document.getElementById('select401CpaAuthsBtn'),
-  selectedCpaAuthCount: document.getElementById('selectedCpaAuthCount'),
-  selectedCpaAuthHint: document.getElementById('selectedCpaAuthHint'),
 };
 
 const fmtPct = n => `${Number(n ?? 0).toFixed(1)}%`;
@@ -85,16 +77,22 @@ function withButtonLoading(button, loadingText, fn) {
 }
 function cpaAuthKey(cpaId, name) { return `${cpaId}::${decodeURIComponent(String(name || ''))}`; }
 function updateSelectedCpaAuthMeta() {
-  if (els.selectedCpaAuthCount) els.selectedCpaAuthCount.textContent = `已选择 ${selectedCpaAuthIds.size} 个 CPA 凭证`;
-  if (els.selectedCpaAuthHint) els.selectedCpaAuthHint.textContent = selectedCpaAuthIds.size ? '下一步可执行：删除 / 上传仓库 / 下载凭证文件' : '可选择全部 / 异常 / 401，再统一处理';
+  document.querySelectorAll('.cpa-card').forEach(card => {
+    const cpaId = card.dataset.cpaId || '';
+    const count = Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${cpaId}::`)).length;
+    const countEl = card.querySelector('.selected-cpa-auth-count');
+    const hintEl = card.querySelector('.selected-cpa-auth-hint');
+    if (countEl) countEl.textContent = `已选择 ${count} 个凭证`;
+    if (hintEl) hintEl.textContent = count ? '下一步：删除 / 上传仓库 / 下载凭证文件' : '可选择全部 / 异常 / 401';
+  });
 }
 function toggleCpaAuthSelect(cpaId, encodedName, checked) {
   const key = cpaAuthKey(cpaId, encodedName);
   if (checked) selectedCpaAuthIds.add(key); else selectedCpaAuthIds.delete(key);
   updateSelectedCpaAuthMeta();
 }
-function getSelectedCpaAuthItems() {
-  return Array.from(selectedCpaAuthIds).map(key => { const [cpaId, ...rest] = key.split('::'); return { cpa_id: cpaId, file_name: rest.join('::') }; }).filter(x => x.cpa_id && x.file_name);
+function getSelectedCpaAuthItems(cpaId = '') {
+  return Array.from(selectedCpaAuthIds).map(key => { const [id, ...rest] = key.split('::'); return { cpa_id: id, file_name: rest.join('::') }; }).filter(x => x.cpa_id && x.file_name && (!cpaId || String(x.cpa_id) === String(cpaId)));
 }
 function classifySelectedCpaAuth(acc) {
   if (acc.invalid_401) return '401';
@@ -102,14 +100,13 @@ function classifySelectedCpaAuth(acc) {
   if ((!acc.invalid_401) && (!acc.quota_limited) && ['error','exception','abnormal','unknown'].includes(status)) return 'abnormal';
   return 'other';
 }
-function selectCpaAuthsByMode(mode) {
-  selectedCpaAuthIds.clear();
-  latestCpas.forEach(cpa => {
-    (cpa.accounts || []).forEach(acc => {
-      const kind = classifySelectedCpaAuth(acc);
-      const shouldPick = mode === 'all' ? true : mode === '401' ? kind === '401' : mode === 'abnormal' ? kind === 'abnormal' : false;
-      if (shouldPick) selectedCpaAuthIds.add(cpaAuthKey(cpa.id, encodeURIComponent(acc.name || acc.email || '')));
-    });
+function selectCpaAuthsByMode(cpaId, mode) {
+  Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${cpaId}::`)).forEach(key => selectedCpaAuthIds.delete(key));
+  const cpa = latestCpas.find(x => String(x.id) === String(cpaId));
+  (cpa?.accounts || []).forEach(acc => {
+    const kind = classifySelectedCpaAuth(acc);
+    const shouldPick = mode === 'all' ? true : mode === '401' ? kind === '401' : mode === 'abnormal' ? kind === 'abnormal' : false;
+    if (shouldPick) selectedCpaAuthIds.add(cpaAuthKey(cpaId, encodeURIComponent(acc.name || acc.email || '')));
   });
   updateSelectedCpaAuthMeta();
   renderCpas(latestCpas);
@@ -210,13 +207,13 @@ function renderCpaCard(cpa) {
   const expanded = Boolean(cpa.expanded);
   const visibleAccounts = expanded ? (cpa.accounts || []) : (cpa.accounts || []).slice(0, 12);
   const hiddenCount = Math.max(0, (cpa.accounts || []).length - visibleAccounts.length);
+  const selectedCount = Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${cpa.id}::`)).length;
   const accountHtml = visibleAccounts.map(acc => {
     const encodedName = encodeURIComponent(acc.name || acc.email || '');
     const checked = selectedCpaAuthIds.has(cpaAuthKey(cpa.id, encodedName));
     return `<div class="account-chip">
       <label class="account-pick">
         <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleCpaAuthSelect('${cpa.id}', '${encodedName}', this.checked)">
-        
       </label>
       <div class="account-chip-top"><strong title="${esc(acc.email || acc.name)}">${esc(acc.email || acc.name)}</strong><span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span></div>
       <div class="progress mini-remain"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
@@ -224,7 +221,7 @@ function renderCpaCard(cpa) {
       <div class="muted">${(acc.refreshed_at || acc.quota_checked_at) ? `更新 ${fmtTime(acc.refreshed_at || acc.quota_checked_at)}` : '未取到时间'}</div>
     </div>`;
   }).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>';
-  return `<div class="cpa-card" data-cpa-id="${cpa.id}"><div class="cpa-head"><div class="cpa-title-block"><div class="order-tools"><button class="ghost small-btn order-btn" onclick="moveCpa('${cpa.id}', 'up')">↑</button><button class="ghost small-btn order-btn" onclick="moveCpa('${cpa.id}', 'down')">↓</button></div><div><div><strong>${cpa.name}</strong> <span class="badge">${cpa.provider}</span></div><div class="muted">${cpa.base_url}</div></div></div><div class="cpa-actions"><button class="ghost small-btn js-toggle-expand" onclick="toggleCpaExpand('${cpa.id}', ${expanded ? 'false' : 'true'}, this)">${expanded ? '收起' : '展开'}</button><button class="ghost small-btn" onclick="renameCpa('${cpa.id}', '${esc(cpa.name)}')">重命名</button><button class="ghost small-btn js-refresh-cpa" onclick="refreshCpa('${cpa.id}', this)">刷新当前 CPA</button><button class="danger small-btn" onclick="deleteCpa('${cpa.id}')">删除 CPA</button></div></div><div class="mini-grid"><div class="mini-stat"><div class="muted">总凭证</div><div class="n">${fmtNum(cpa.total)}</div></div><div class="mini-stat"><div class="muted">401</div><div class="n err">${fmtNum(cpa.invalid_401)}</div></div><div class="mini-stat"><div class="muted">异常</div><div class="n warn">${fmtNum(cpa.abnormal)}</div></div><div class="mini-stat"><div class="muted">limit</div><div class="n warn">${fmtNum(cpa.quota_limited)}</div></div><div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div></div><div class="quota-row"><div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? `总 ${fmtNum(cpa.total)} · 异常 ${fmtNum(cpa.abnormal)} · 已知额度 ${knownQuotaAccounts} 个 · 未知 ${unknownQuotaAccounts} 个` : `总 ${fmtNum(cpa.total)} · 异常 ${fmtNum(cpa.abnormal)} · 剩余 ${fmtMaybePct(cpa.remaining_ratio)} / 已用 ${fmtMaybePct(cpa.used_ratio)} · 未知 ${unknownQuotaAccounts} 个`}</span></div><div class="progress remain"><span style="width:${cpa.remaining_ratio ?? 0}%"></span></div></div><div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）${!expanded && hiddenCount > 0 ? ` · 已收起 ${hiddenCount} 个` : ''}</div><div class="account-grid compact-account-grid">${accountHtml}</div></div>`;
+  return `<div class="cpa-card" data-cpa-id="${cpa.id}"><div class="cpa-head"><div class="cpa-title-block"><div class="order-tools"><button class="ghost small-btn order-btn" onclick="moveCpa('${cpa.id}', 'up')">↑</button><button class="ghost small-btn order-btn" onclick="moveCpa('${cpa.id}', 'down')">↓</button></div><div><div><strong>${cpa.name}</strong> <span class="badge">${cpa.provider}</span></div><div class="muted">${cpa.base_url}</div></div></div><div class="cpa-actions"><button class="ghost small-btn js-toggle-expand" onclick="toggleCpaExpand('${cpa.id}', ${expanded ? 'false' : 'true'}, this)">${expanded ? '收起' : '展开'}</button><button class="ghost small-btn" onclick="renameCpa('${cpa.id}', '${esc(cpa.name)}')">重命名</button><button class="ghost small-btn js-refresh-cpa" onclick="refreshCpa('${cpa.id}', this)">刷新当前 CPA</button><button class="danger small-btn" onclick="deleteCpa('${cpa.id}')">删除 CPA</button></div></div><div class="mini-grid"><div class="mini-stat"><div class="muted">总凭证</div><div class="n">${fmtNum(cpa.total)}</div></div><div class="mini-stat"><div class="muted">401</div><div class="n err">${fmtNum(cpa.invalid_401)}</div></div><div class="mini-stat"><div class="muted">异常</div><div class="n warn">${fmtNum(cpa.abnormal)}</div></div><div class="mini-stat"><div class="muted">limit</div><div class="n warn">${fmtNum(cpa.quota_limited)}</div></div><div class="mini-stat"><div class="muted">健康</div><div class="n ok">${fmtNum(cpa.healthy)}</div></div></div><div class="quota-row"><div class="quota-label"><span>总凭证额度使用情况</span><span>${cpa.remaining_ratio === null || cpa.remaining_ratio === undefined ? `总 ${fmtNum(cpa.total)} · 异常 ${fmtNum(cpa.abnormal)} · 已知额度 ${knownQuotaAccounts} 个 · 未知 ${unknownQuotaAccounts} 个` : `总 ${fmtNum(cpa.total)} · 异常 ${fmtNum(cpa.abnormal)} · 剩余 ${fmtMaybePct(cpa.remaining_ratio)} / 已用 ${fmtMaybePct(cpa.used_ratio)} · 未知 ${unknownQuotaAccounts} 个`}</span></div><div class="progress remain"><span style="width:${cpa.remaining_ratio ?? 0}%"></span></div></div><div class="muted" style="margin:10px 0">当前凭证状态（实时读取 CPA 后台）${!expanded && hiddenCount > 0 ? ` · 已收起 ${hiddenCount} 个` : ''}</div><div class="credential-store-head" style="margin:0 0 10px 0"><strong class="selected-cpa-auth-count">已选择 ${selectedCount} 个凭证</strong><div class="credential-store-tools"><span class="muted selected-cpa-auth-hint">${selectedCount ? '下一步：删除 / 上传仓库 / 下载凭证文件' : '可选择全部 / 异常 / 401'}</span><button class="ghost small-btn" onclick="selectCpaAuthsByMode('${cpa.id}', 'all')">选择全部</button><button class="ghost small-btn" onclick="selectCpaAuthsByMode('${cpa.id}', 'abnormal')">选择异常</button><button class="ghost small-btn" onclick="selectCpaAuthsByMode('${cpa.id}', '401')">选择401</button><button class="small-btn" onclick="saveSelectedCpaAuths('${cpa.id}', this)">上传仓库</button><button class="ghost small-btn" onclick="exportSelectedCpaAuths('${cpa.id}')">下载凭证文件</button><button class="danger small-btn" onclick="deleteSelectedCpaAuths('${cpa.id}', this)">删除</button></div></div><div class="account-grid compact-account-grid">${accountHtml}</div></div>`;
 }
 function replaceCpaCard(cpa) { const old = els.cpaList.querySelector(`[data-cpa-id="${cpa.id}"]`), html = renderCpaCard(cpa); if (old) old.outerHTML = html; else els.cpaList.insertAdjacentHTML('afterbegin', html); }
 function renderCpas(cpas) { els.cpaList.innerHTML = cpas.map(renderCpaCard).join(''); }
@@ -247,18 +244,12 @@ async function saveCpaAuthToStore(cpaId, encodedName, button) { const run = asyn
 跳过重复 ${skipped} 个${deduped > 0 ? `
 并清理历史重复 ${deduped} 个` : ''}`); }; return withButtonLoading(button, '入仓中...', run)(); }
 function exportSingleCpaAuth(cpaId, encodedName) { window.open(`/api/cpas/${cpaId}/auth-files/${encodedName}/export`, '_blank'); }
-async function saveSelectedCpaAuths() { const items = getSelectedCpaAuthItems(); if (!items.length) return alert('先勾选 CPA 凭证'); let added = 0, skipped = 0, deduped = 0; for (const item of items) { const res = await fetch(`/api/cpas/${item.cpa_id}/auth-files/${encodeURIComponent(item.file_name)}/save-to-store`, { method:'POST' }); const data = await res.json(); if (!res.ok) return alert(data.error || `入仓失败：${item.file_name}`); added += Number(data.saved?.length || 0); skipped += Number(data.skipped?.length || 0); deduped += Number(data.dedupe_removed || 0); if (data.credentials) renderCredentialStore(data.credentials || [], latestCpas); if (data.cpa) replaceCpaCard(data.cpa); } selectedCpaAuthIds.clear(); updateSelectedCpaAuthMeta(); await loadAll(true); alert(`已批量上传仓库
+async function saveSelectedCpaAuths(cpaId, button) { const items = getSelectedCpaAuthItems(cpaId); if (!items.length) return alert('先勾选这个 CPA 的凭证'); const run = async () => { let added = 0, skipped = 0, deduped = 0; for (const item of items) { const res = await fetch(`/api/cpas/${item.cpa_id}/auth-files/${encodeURIComponent(item.file_name)}/save-to-store`, { method:'POST' }); const data = await res.json(); if (!res.ok) return alert(data.error || `入仓失败：${item.file_name}`); added += Number(data.saved?.length || 0); skipped += Number(data.skipped?.length || 0); deduped += Number(data.dedupe_removed || 0); if (data.credentials) renderCredentialStore(data.credentials || [], latestCpas); if (data.cpa) replaceCpaCard(data.cpa); } Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${cpaId}::`)).forEach(key => selectedCpaAuthIds.delete(key)); updateSelectedCpaAuthMeta(); await loadAll(true); alert(`已批量上传仓库
 新增 ${added} 个
 跳过重复 ${skipped} 个${deduped > 0 ? `
-清理历史重复 ${deduped} 个` : ''}`); }
-function exportSelectedCpaAuths() { const items = getSelectedCpaAuthItems(); if (!items.length) return alert('先勾选 CPA 凭证'); items.forEach(item => window.open(`/api/cpas/${item.cpa_id}/auth-files/${encodeURIComponent(item.file_name)}/export`, '_blank')); }
-async function deleteSelectedCpaAuths() { const items = getSelectedCpaAuthItems(); if (!items.length) return alert('先勾选 CPA 凭证'); if (!confirm(`确认删除这 ${items.length} 个 CPA 凭证吗？`)) return; for (const item of items) { const res = await fetch(`/api/cpas/${item.cpa_id}/auth-files/${encodeURIComponent(item.file_name)}`, { method:'DELETE' }); const data = await res.json(); if (!res.ok) return alert((data.result && data.result.text) || `删除失败：${item.file_name}`); if (data.cpa) replaceCpaCard(data.cpa); if (data.credentials) renderCredentialStore(data.credentials || [], latestCpas); } selectedCpaAuthIds.clear(); updateSelectedCpaAuthMeta(); await loadAll(true); alert(`已删除 ${items.length} 个 CPA 凭证`); }
-function toggleCredentialSelect(id, checked) { if (checked) selectedCredentialIds.add(id); else selectedCredentialIds.delete(id); }
-async function deleteCredential(id) { if (!confirm('确认从仓库删除这个凭证吗？')) return; const res = await fetch(`/api/credentials/${id}`, { method: 'DELETE' }); const data = await res.json(); selectedCredentialIds.delete(id); renderCredentialStore(data.credentials || [], data.cpas || latestCpas); }
-function markRecentlyUploaded(ids = []) { ids.filter(Boolean).forEach(id => recentlyHighlightedCredentialIds.add(id)); renderCredentialStore(latestCredentials, latestCpas); setTimeout(() => { ids.forEach(id => recentlyHighlightedCredentialIds.delete(id)); renderCredentialStore(latestCredentials, latestCpas); }, 5000); }
-function summarizeDeployResults(results = []) { const okItems = results.filter(x => x.ok); const failItems = results.filter(x => !x.ok); const failText = failItems.slice(0, 3).map(x => `${x.filename || x.name}（${x.status_code || 'ERR'}）`).join('、'); return { okItems, failItems, message: failItems.length ? `上传完成：成功 ${okItems.length} 个，失败 ${failItems.length} 个${failText ? `\n失败项：${failText}` : ''}` : `上传成功：${okItems.length} 个`, }; }
-async function importCredentialFiles(files, button) { const fileList = Array.from(files || []).filter(Boolean); if (!fileList.length) return; const run = async () => { const items = await Promise.all(fileList.map(async file => ({ name: file.name, filename: file.name, content: await file.text() }))); const importRes = await fetch('/api/credentials/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) }); const importData = await importRes.json(); if (!importRes.ok) { if (els.credentialFilesInput) els.credentialFilesInput.value = ''; return alert(importData.error || '入仓失败'); } renderCredentialStore(importData.credentials || [], latestCpas); if (els.credentialFilesInput) els.credentialFilesInput.value = ''; const added = Number(importData.saved?.length || 0); const skipped = Number(importData.skipped?.length || 0); const deduped = Number(importData.dedupe_removed || 0); alert(`上传完成\n新增了 ${added} 个\n跳过了 ${skipped} 个重复${deduped > 0 ? `\n并清理了 ${deduped} 个历史重复凭证` : ''}`); }; return withButtonLoading(button, '上传中...', run)(); }
-async function deploySelectedCredentials() { const run = async () => { const targetId = els.credentialTargetSelect.value, ids = Array.from(selectedCredentialIds); if (!targetId) return alert('当前没有可用的目标 CPA'); if (!ids.length) return alert('先勾选仓库里的凭证'); const res = await fetch('/api/credentials/deploy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ target_id: targetId, credential_ids: ids }) }); const data = await res.json(); if (data.cpa) replaceCpaCard(data.cpa); renderCredentialStore(data.credentials || [], latestCpas); const summary = summarizeDeployResults(data.results || []); summary.failItems.forEach(x => selectedCredentialIds.add(x.id)); summary.okItems.forEach(x => selectedCredentialIds.delete(x.id)); alert(summary.message); }; return withButtonLoading(els.deploySelectedBtn, '上传中...', run)(); }
+清理历史重复 ${deduped} 个` : ''}`); }; return withButtonLoading(button, '上传中...', run)(); }
+function exportSelectedCpaAuths(cpaId) { const items = getSelectedCpaAuthItems(cpaId); if (!items.length) return alert('先勾选这个 CPA 的凭证'); items.forEach(item => window.open(`/api/cpas/${item.cpa_id}/auth-files/${encodeURIComponent(item.file_name)}/export`, '_blank')); }
+async function deleteSelectedCpaAuths(cpaId, button) { const items = getSelectedCpaAuthItems(cpaId); if (!items.length) return alert('先勾选这个 CPA 的凭证'); if (!confirm(`确认删除这 ${items.length} 个凭证吗？`)) return; const run = async () => { for (const item of items) { const res = await fetch(`/api/cpas/${item.cpa_id}/auth-files/${encodeURIComponent(item.file_name)}`, { method:'DELETE' }); const data = await res.json(); if (!res.ok) return alert((data.result && data.result.text) || `删除失败：${item.file_name}`); if (data.cpa) replaceCpaCard(data.cpa); if (data.credentials) renderCredentialStore(data.credentials || [], latestCpas); } Array.from(selectedCpaAuthIds).filter(key => key.startsWith(`${cpaId}::`)).forEach(key => selectedCpaAuthIds.delete(key)); updateSelectedCpaAuthMeta(); await loadAll(true); alert(`已删除 ${items.length} 个凭证`); }; return withButtonLoading(button, '删除中...', run)(); }
 async function addCpa(e) { e.preventDefault(); const fd = new FormData(els.cpaForm); const payload = Object.fromEntries(fd.entries()); await fetch('/api/cpas', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)}); els.cpaForm.reset(); await loadAll(true); }
 async function scanCpas() { const run = async () => { await fetch('/api/cpas/scan', {method:'POST'}); await loadAll(true); }; return withButtonLoading(els.scanCpasBtn, '扫描中...', run)(); }
 async function refreshAll() { const run = async () => { await loadAll(true); }; return withButtonLoading(els.refreshAllBtn, '刷新中...', run)(); }
@@ -269,12 +260,6 @@ els.cpaForm?.addEventListener('submit', addCpa);
 els.refreshServerBtn?.addEventListener('click', refreshServerOnly);
 els.refreshAllBtn?.addEventListener('click', refreshAll);
 els.scanCpasBtn?.addEventListener('click', scanCpas);
-els.selectAllCpaAuthsBtn?.addEventListener('click', () => selectCpaAuthsByMode('all'));
-els.selectAbnormalCpaAuthsBtn?.addEventListener('click', () => selectCpaAuthsByMode('abnormal'));
-els.select401CpaAuthsBtn?.addEventListener('click', () => selectCpaAuthsByMode('401'));
-els.saveSelectedCpaAuthsBtn?.addEventListener('click', () => withButtonLoading(els.saveSelectedCpaAuthsBtn, '上传中...', saveSelectedCpaAuths)());
-els.exportSelectedCpaAuthsBtn?.addEventListener('click', exportSelectedCpaAuths);
-els.deleteSelectedCpaAuthsBtn?.addEventListener('click', () => withButtonLoading(els.deleteSelectedCpaAuthsBtn, '删除中...', deleteSelectedCpaAuths)());
 els.syncCredentialStatusBtn?.addEventListener('click', () => syncCredentialStatus());
 els.selectAllCredentialsBtn?.addEventListener('click', () => { const boxes = Array.from(document.querySelectorAll('#credentialStoreList input[type="checkbox"]')); const allChecked = boxes.length > 0 && boxes.every(el => el.checked); boxes.forEach(el => { const next = !allChecked; el.checked = next; const id = el.closest('.credential-item')?.dataset.credId; if (id) toggleCredentialSelect(id, next); }); });
 els.deploySelectedBtn?.addEventListener('click', deploySelectedCredentials);
