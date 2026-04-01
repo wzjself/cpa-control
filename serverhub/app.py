@@ -22,6 +22,7 @@ from flask import Flask, jsonify, render_template, request, Response
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent
+REQUESTS_SESSION = requests.Session()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "serverhub.db"
 CPA_WARDEN_DIR = Path("/root/cpa-warden")
@@ -38,9 +39,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__, template_folder="templates", static_folder="static")
 stop_event = threading.Event()
 quota_probe_cache: dict[str, dict[str, Any]] = {}
+refresh_progress_store: dict[str, dict[str, Any]] = {}
 QUOTA_CACHE_TTL_SECONDS = 60
 clirelay_summary_cache: dict[str, Any] = {'data': None, 'cached_at_ts': 0.0}
 CLIRELAY_CACHE_TTL_SECONDS = 1.0
+MAX_BULK_WORKERS = 40
 
 
 def utc_now() -> datetime:
@@ -71,6 +74,9 @@ def init_db() -> None:
     conn = get_conn()
     conn.executescript(
         """
+        PRAGMA journal_mode=WAL;
+        PRAGMA synchronous=NORMAL;
+
         CREATE TABLE IF NOT EXISTS metric_samples (
             ts TEXT PRIMARY KEY,
             cpu_percent REAL,
@@ -112,6 +118,13 @@ def init_db() -> None:
             upload_error_detail TEXT NOT NULL DEFAULT '',
             archived INTEGER NOT NULL DEFAULT 0
         );
+
+        CREATE INDEX IF NOT EXISTS idx_metric_samples_ts ON metric_samples(ts);
+        CREATE INDEX IF NOT EXISTS idx_cpa_targets_sort_order ON cpa_targets(sort_order);
+        CREATE INDEX IF NOT EXISTS idx_credential_store_archived_uploaded_at ON credential_store(archived, uploaded_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_credential_store_last_target_id ON credential_store(last_target_id);
+        CREATE INDEX IF NOT EXISTS idx_credential_store_name ON credential_store(name);
+        CREATE INDEX IF NOT EXISTS idx_credential_store_filename ON credential_store(filename);
         """
     )
     cpa_cols = [r[1] for r in conn.execute("PRAGMA table_info(cpa_targets)").fetchall()]
@@ -261,7 +274,27 @@ def sampler_loop() -> None:
         stop_event.wait(SAMPLE_INTERVAL)
 
 
-def get_metric_history(hours: int | None = 24) -> list[dict[str, Any]]:
+def downsample_history(rows: list[dict[str, Any]], max_points: int | None = None) -> list[dict[str, Any]]:
+    if not max_points or max_points <= 0 or len(rows) <= max_points:
+        return rows
+    if max_points == 1:
+        return [rows[-1]]
+    step = (len(rows) - 1) / (max_points - 1)
+    sampled = []
+    used = set()
+    for i in range(max_points):
+        idx = int(round(i * step))
+        idx = max(0, min(len(rows) - 1, idx))
+        if idx in used:
+            continue
+        used.add(idx)
+        sampled.append(rows[idx])
+    if sampled[-1] is not rows[-1]:
+        sampled[-1] = rows[-1]
+    return sampled
+
+
+def get_metric_history(hours: int | None = 24, max_points: int | None = None) -> list[dict[str, Any]]:
     conn = get_conn()
     if hours is None:
         rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples ORDER BY ts").fetchall()]
@@ -269,11 +302,11 @@ def get_metric_history(hours: int | None = 24) -> list[dict[str, Any]]:
         since = (utc_now() - timedelta(hours=hours)).isoformat()
         rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples WHERE ts >= ? ORDER BY ts", (since,)).fetchall()]
     conn.close()
-    return rows
+    return downsample_history(rows, max_points=max_points)
 
 
-def get_metric_summary(history_hours: int | None = 24, clirelay: dict[str, Any] | None = None) -> dict[str, Any]:
-    history = get_metric_history(history_hours)
+def get_metric_summary(history_hours: int | None = 24, clirelay: dict[str, Any] | None = None, include_history: bool = True, history_max_points: int | None = None) -> dict[str, Any]:
+    history = get_metric_history(history_hours, max_points=history_max_points)
     latest = history[-1] if history else collect_sample()
     totals = {'rx_mb': 0.0, 'tx_mb': 0.0}
     if history:
@@ -291,10 +324,9 @@ def get_metric_summary(history_hours: int | None = 24, clirelay: dict[str, Any] 
     return {
         'latest': latest,
         'health': compute_health(latest, clirelay),
-        'top_processes': top_processes(),
         'traffic_24h': totals,
         'current_net_kbps': {'rx': current_rx_kbps, 'tx': current_tx_kbps},
-        'history': history,
+        'history': history if include_history else [],
     }
 
 
@@ -306,17 +338,27 @@ def get_clirelay_summary(force: bool = False) -> dict[str, Any]:
         return dict(cached)
 
     try:
-        import requests  # type: ignore
         headers = {'x-management-key': CLIRELAY_MGMT_KEY}
-        dash = requests.get(f'{CLIRELAY_BASE}/v0/management/dashboard-summary?days=7', headers=headers, timeout=3)
-        chart = requests.get(f'{CLIRELAY_BASE}/v0/management/usage/chart-data?days=7', headers=headers, timeout=3)
-        system = requests.get(f'{CLIRELAY_BASE}/v0/management/system-stats', headers=headers, timeout=3)
-        auth_files = requests.get(f'{CLIRELAY_BASE}/v0/management/auth-files', headers=headers, timeout=3)
-        if dash.ok and chart.ok and system.ok:
+        endpoints = {
+            'dash': f'{CLIRELAY_BASE}/v0/management/dashboard-summary?days=7',
+            'chart': f'{CLIRELAY_BASE}/v0/management/usage/chart-data?days=7',
+            'system': f'{CLIRELAY_BASE}/v0/management/system-stats',
+            'auth_files': f'{CLIRELAY_BASE}/v0/management/auth-files',
+        }
+        responses: dict[str, requests.Response] = {}
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            future_map = {pool.submit(REQUESTS_SESSION.get, url, headers=headers, timeout=3): key for key, url in endpoints.items()}
+            for future in as_completed(future_map):
+                responses[future_map[future]] = future.result()
+        dash = responses.get('dash')
+        chart = responses.get('chart')
+        system = responses.get('system')
+        auth_files = responses.get('auth_files')
+        if dash and chart and system and dash.ok and chart.ok and system.ok:
             dash_j = dash.json()
             chart_j = chart.json()
             sys_j = system.json()
-            auth_j = auth_files.json() if auth_files.ok else {'files': []}
+            auth_j = auth_files.json() if (auth_files and auth_files.ok) else {'files': []}
             kpi = dash_j.get('kpi', {})
             active = sys_j.get('active_concurrency', []) or []
             rpm_now = sum(int(x.get('rpm', 0) or 0) for x in active)
@@ -464,11 +506,29 @@ def normalize_credential_name(value: str) -> str:
     return raw
 
 
-def list_credentials() -> list[dict[str, Any]]:
+def list_credentials(include_content: bool = True) -> list[dict[str, Any]]:
     conn = get_conn()
-    rows = [dict(r) for r in conn.execute("SELECT * FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
+    columns = '*'
+    if not include_content:
+        columns = 'id,name,filename,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,uploaded_to_cpa,upload_status_text,upload_error_detail,archived'
+    rows = [dict(r) for r in conn.execute(f"SELECT {columns} FROM credential_store WHERE archived = 0 ORDER BY uploaded_at DESC").fetchall()]
     conn.close()
     return rows
+
+
+def serialize_credentials_for_list(cpas: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    cpas = cpas if cpas is not None else load_cpas()
+    cpa_map = {c['id']: c for c in cpas}
+    presence_map = build_credential_cpa_presence(cpas)
+    credentials = []
+    for item in list_credentials(include_content=False):
+        item = dict(item)
+        last_target = cpa_map.get(item.get('last_target_id'))
+        item['last_target_name'] = last_target.get('name') if last_target else None
+        raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
+        item['present_in_cpas'] = presence_map.get(raw, [])
+        credentials.append(item)
+    return credentials
 
 
 def credential_dedupe_key(item: dict[str, Any]) -> str:
@@ -603,15 +663,26 @@ def scan_cpa(target: dict[str, Any]) -> dict[str, Any]:
     return {'returncode': proc.returncode, 'stdout': proc.stdout[-4000:], 'stderr': proc.stderr[-4000:]}
 
 
-def native_refresh_cpa(target: dict[str, Any]) -> dict[str, Any]:
+def native_refresh_cpa(target: dict[str, Any], progress: dict[str, Any] | None = None) -> dict[str, Any]:
     started = time.time()
     refreshed_at = now_iso()
+    if progress is not None:
+        progress['stage'] = '读取远端凭证列表'
+        progress['percent'] = 1
     warden_map = load_cpa_warden_accounts(target)
     t0 = time.time()
     raw_files = fetch_cpa_auth_files(target)
     t1 = time.time()
-    hydrated = hydrate_live_quota(target, raw_files)
+    if progress is not None:
+        progress['total'] = len(raw_files)
+        progress['scanned'] = 0
+        progress['stage'] = '正在扫描远端凭证'
+        progress['percent'] = 3 if raw_files else 100
+    hydrated = hydrate_live_quota(target, raw_files, progress=progress)
     t2 = time.time()
+    if progress is not None:
+        progress['stage'] = '正在汇总刷新结果'
+        progress['percent'] = 95 if raw_files else 100
     live_accounts = [classify_cpa_file(raw) for raw in hydrated]
     accounts = merge_cpa_accounts(live_accounts, warden_map, include_warden_only=False)
     for acc in accounts:
@@ -649,7 +720,7 @@ def native_refresh_cpa(target: dict[str, Any]) -> dict[str, Any]:
         if remaining_values:
             summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
             summary['used_ratio'] = round(100 - summary['remaining_ratio'], 2)
-        summary['accounts'] = accounts[:200]
+        summary['accounts'] = accounts
     save_cpa_snapshot(target['id'], summary)
     return {
         'summary': summary,
@@ -684,6 +755,39 @@ def extract_remaining_ratio(rate_limit: dict[str, Any] | None) -> float | None:
         return None
 
 
+def extract_quota_reset_at(rate_limit: dict[str, Any] | None) -> str | None:
+    if not isinstance(rate_limit, dict):
+        return None
+    window = rate_limit.get('primary_window') if isinstance(rate_limit.get('primary_window'), dict) else rate_limit
+    if not isinstance(window, dict):
+        return None
+    for key in ('reset_at', 'resets_at', 'next_refresh_at', 'refresh_at', 'reset_time', 'next_reset_at'):
+        value = window.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        try:
+            if value is None or value == '':
+                continue
+            ts = float(value)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        except Exception:
+            pass
+    for key in ('reset_ts', 'reset_at_ts', 'next_refresh_ts', 'refresh_ts'):
+        value = window.get(key)
+        try:
+            if value is None or value == '':
+                continue
+            ts = float(value)
+            if ts > 1e12:
+                ts /= 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        except Exception:
+            continue
+    return None
+
+
 def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
     auth_index = str(item.get('auth_index') or '').strip()
     id_token = item.get('id_token') or {}
@@ -707,7 +811,7 @@ def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, A
         },
     }
     url = f"{target['base_url'].rstrip('/')}/v0/management/api-call"
-    r = requests.post(url, headers=mgmt_headers(target['token'], include_json=True), json=payload, timeout=25)
+    r = requests.post(url, headers=mgmt_headers(target['token'], include_json=True), json=payload, timeout=12)
     r.raise_for_status()
     outer = r.json()
     if not isinstance(outer, dict) or outer.get('status_code') != 200:
@@ -728,21 +832,31 @@ def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, A
         'plan_type': str(body.get('plan_type') or item.get('plan_type') or ((item.get('id_token') or {}).get('plan_type')) or 'unknown').lower(),
         'quota_signal_source': 'wham-usage',
         'quota_checked_at': now_iso(),
+        'quota_reset_at': extract_quota_reset_at(rate_limit),
         'cached_at_ts': now_ts,
     }
     quota_probe_cache[cache_key] = dict(result)
     return result
 
 
-def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]], progress: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     need = []
     for idx, item in enumerate(files):
         if item.get('quota_remaining_ratio') is None and item.get('usage_remaining_ratio') is None:
             if item.get('auth_index') and ((item.get('id_token') or {}).get('chatgpt_account_id') or item.get('chatgpt_account_id')):
                 need.append((idx, item))
+    if progress is not None:
+        progress['total'] = len(files)
+        progress['scanned'] = 0
+        progress['probe_total'] = len(need)
+        progress['probe_done'] = 0
+        progress['stage'] = '正在扫描远端凭证'
     if not need:
+        if progress is not None:
+            progress['scanned'] = len(files)
+            progress['percent'] = 100
         return files
-    max_workers = min(4, len(need))
+    max_workers = min(MAX_BULK_WORKERS, len(need))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         fut_map = {pool.submit(probe_cpa_quota, target, item): idx for idx, item in need}
         for fut in as_completed(fut_map):
@@ -752,6 +866,10 @@ def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]]) -> l
             except Exception:
                 info = None
             if not info:
+                if progress is not None:
+                    progress['probe_done'] = int(progress.get('probe_done') or 0) + 1
+                    progress['scanned'] = min(len(files), int(round((progress['probe_done'] / max(progress['probe_total'], 1)) * len(files))))
+                    progress['percent'] = int(round((progress['scanned'] / max(len(files), 1)) * 100))
                 continue
             if info.get('remaining_ratio') is not None:
                 files[idx]['usage_remaining_ratio'] = round(float(info['remaining_ratio']) / 100.0, 4)
@@ -763,6 +881,15 @@ def hydrate_live_quota(target: dict[str, Any], files: list[dict[str, Any]]) -> l
                 files[idx]['quota_signal_source'] = info['quota_signal_source']
             if info.get('quota_checked_at'):
                 files[idx]['quota_checked_at'] = info['quota_checked_at']
+            if info.get('quota_reset_at'):
+                files[idx]['quota_reset_at'] = info['quota_reset_at']
+            if progress is not None:
+                progress['probe_done'] = int(progress.get('probe_done') or 0) + 1
+                progress['scanned'] = min(len(files), int(round((progress['probe_done'] / max(progress['probe_total'], 1)) * len(files))))
+                progress['percent'] = int(round((progress['scanned'] / max(len(files), 1)) * 100))
+    if progress is not None:
+        progress['scanned'] = len(files)
+        progress['percent'] = 100
     return files
 
 
@@ -796,6 +923,7 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
         'usage_limit_reached': item.get('usage_limit_reached'),
         'quota_signal_source': item.get('quota_signal_source'),
         'quota_checked_at': refresh_time,
+        'quota_reset_at': item.get('quota_reset_at') or item.get('next_refresh_at') or item.get('reset_at'),
         'source': 'management-auth-files',
     }
 
@@ -915,6 +1043,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
         status = '401' if invalid_401 else 'limit' if quota_limited else (acc.get('status') or w.get('status') or (plan_type if plan_type != 'unknown' else 'unknown'))
         status_message = acc.get('status_message') or w.get('status_message') or ''
         quota_checked_at = acc.get('quota_checked_at') or w.get('quota_checked_at')
+        quota_reset_at = acc.get('quota_reset_at') or w.get('quota_reset_at')
 
         merged.append({
             'name': acc.get('name') or w.get('name'),
@@ -927,6 +1056,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'status_message': status_message,
             'plan_type': plan_type,
             'quota_checked_at': quota_checked_at,
+            'quota_reset_at': quota_reset_at,
             'source': 'merged',
         })
         seen.update(acc_keys)
@@ -955,6 +1085,7 @@ def merge_cpa_accounts(auth_accounts: list[dict[str, Any]], warden_map: dict[str
             'status_message': w.get('status_message') or '',
             'plan_type': plan_type,
             'quota_checked_at': w.get('quota_checked_at'),
+            'quota_reset_at': w.get('quota_reset_at'),
             'source': 'warden-db-only',
         })
     return merged
@@ -1055,7 +1186,7 @@ def cpa_summary(target: dict[str, Any], live: bool = False, prefer_snapshot: boo
         if remaining_values:
             summary['remaining_ratio'] = round(sum(remaining_values) / len(remaining_values), 2)
             summary['used_ratio'] = round(100 - summary['remaining_ratio'], 2)
-        summary['accounts'] = accounts[:200]
+        summary['accounts'] = accounts
 
     if live and accounts:
         save_cpa_snapshot(target['id'], summary)
@@ -1181,13 +1312,16 @@ def api_overview():
     include_cpas = request.args.get('include_cpas', '1') != '0'
     include_clirelay = request.args.get('include_clirelay', '1') != '0'
     hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
+    points_map = {'3h': 90, '24h': 120, '7d': 160, '30d': 160, 'all': 200}
     history_hours = hours_map.get(range_key, 24)
+    history_max_points = points_map.get(range_key, 120)
+    clirelay = get_clirelay_summary() if include_clirelay else None
     payload = {
-        'server': get_metric_summary(history_hours),
+        'server': get_metric_summary(history_hours, clirelay, include_history=True, history_max_points=history_max_points),
         'range': range_key,
     }
     if include_clirelay:
-        payload['clirelay'] = get_clirelay_summary()
+        payload['clirelay'] = clirelay
     if include_cpas:
         payload['cpas'] = [cpa_summary(t, live=False) for t in load_cpas()]
     return jsonify(payload)
@@ -1196,11 +1330,15 @@ def api_overview():
 @app.get('/api/server-status')
 def api_server_status():
     range_key = request.args.get('range', '24h')
+    include_history = request.args.get('include_history', '0') == '1'
     hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
+    points_map = {'3h': 90, '24h': 120, '7d': 160, '30d': 160, 'all': 200}
     history_hours = hours_map.get(range_key, 24)
+    history_max_points = points_map.get(range_key, 120) if include_history else None
+    clirelay = get_clirelay_summary()
     return jsonify({
-        'server': get_metric_summary(history_hours),
-        'clirelay': get_clirelay_summary(),
+        'server': get_metric_summary(history_hours, clirelay, include_history=include_history, history_max_points=history_max_points),
+        'clirelay': clirelay,
         'range': range_key,
     })
 
@@ -1292,25 +1430,27 @@ def api_delete_cpa(cpa_id: str):
 
 @app.post('/api/cpas/scan')
 def api_scan_cpas():
-    results = []
-    for target in load_cpas():
+    targets = load_cpas()
+    def worker(target: dict[str, Any]) -> dict[str, Any]:
         started = time.time()
         try:
             native = native_refresh_cpa(target)
-            results.append({
+            return {
                 'id': target['id'],
                 'name': target['name'],
                 'mode': 'native-refresh',
                 'metrics': native.get('metrics', {}),
                 'elapsed_ms': int((time.time() - started) * 1000),
-            })
+            }
         except Exception as exc:
-            results.append({
+            return {
                 'id': target['id'],
                 'name': target['name'],
                 'error': str(exc),
                 'elapsed_ms': int((time.time() - started) * 1000),
-            })
+            }
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(worker, targets))
     return jsonify({'results': results, 'cpas': [cpa_summary(t, live=False) for t in load_cpas()]})
 
 
@@ -1319,16 +1459,7 @@ def api_scan_cpas():
 def api_list_credentials():
     dedupe = cleanup_duplicate_credentials()
     cpas = load_cpas()
-    cpa_map = {c['id']: c for c in cpas}
-    presence_map = build_credential_cpa_presence(cpas)
-    credentials = []
-    for item in list_credentials():
-        item = dict(item)
-        last_target = cpa_map.get(item.get('last_target_id'))
-        item['last_target_name'] = last_target.get('name') if last_target else None
-        raw = normalize_credential_name(item.get('name') or item.get('filename') or '')
-        item['present_in_cpas'] = presence_map.get(raw, [])
-        credentials.append(item)
+    credentials = serialize_credentials_for_list(cpas)
     return jsonify({'credentials': credentials, 'cpas': cpas, 'dedupe_removed': int((dedupe or {}).get('removed') or 0)})
 
 
@@ -1339,7 +1470,58 @@ def api_import_credentials():
     if not isinstance(items, list) or not items:
         return jsonify({'error': '没有可导入的凭证'}), 400
     result = save_credentials_to_store(items)
-    return jsonify({'saved': result.get('saved', []), 'skipped': result.get('skipped', []), 'dedupe_removed': result.get('dedupe_removed', 0), 'credentials': list_credentials()})
+    cpas = load_cpas()
+    return jsonify({'saved': result.get('saved', []), 'skipped': result.get('skipped', []), 'dedupe_removed': result.get('dedupe_removed', 0), 'credentials': serialize_credentials_for_list(cpas), 'cpas': cpas})
+
+
+@app.post('/api/credentials/import-bulk/start')
+def api_import_credentials_bulk_start():
+    data = request.get_json(force=True) or {}
+    items = data.get('items') or []
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': '没有可导入的凭证'}), 400
+    task_id = uuid.uuid4().hex[:16]
+    progress = {'task_id': task_id, 'type': 'import-bulk', 'stage': '已创建本地上传仓库任务', 'total': len(items), 'scanned': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'percent': 0, 'done': False, 'ok': False, 'error': None, 'elapsed_ms': 0}
+    refresh_progress_store[task_id] = progress
+    def runner():
+        started = time.time()
+        try:
+            normalized = []
+            for item in items:
+                content = str((item or {}).get('content') or '').strip()
+                if not content:
+                    progress['scanned'] = int(progress.get('scanned') or 0) + 1
+                    progress['failed'] = int(progress.get('failed') or 0) + 1
+                    total = max(int(progress.get('total') or 0), 1)
+                    progress['percent'] = round((int(progress.get('scanned') or 0) / total) * 100)
+                    continue
+                normalized.append({
+                    'name': str((item or {}).get('name') or (item or {}).get('filename') or '').strip(),
+                    'filename': str((item or {}).get('filename') or (item or {}).get('name') or '').strip(),
+                    'content': content,
+                })
+                progress['scanned'] = int(progress.get('scanned') or 0) + 1
+                total = max(int(progress.get('total') or 0), 1)
+                progress['percent'] = round((int(progress.get('scanned') or 0) / total) * 100)
+            progress['stage'] = '正在写入仓库'
+            result = save_credentials_to_store(normalized)
+            progress['success'] = len(result.get('saved', []))
+            progress['skipped'] = len(result.get('skipped', []))
+            progress['failed'] = int(progress.get('failed') or 0)
+            progress['done'] = True
+            progress['ok'] = True
+            progress['percent'] = 100
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            cpas = load_cpas()
+            progress['result'] = {'saved': result.get('saved', []), 'skipped': result.get('skipped', []), 'dedupe_removed': result.get('dedupe_removed', 0), 'credentials': serialize_credentials_for_list(cpas), 'cpas': cpas}
+        except Exception as exc:
+            progress['done'] = True
+            progress['ok'] = False
+            progress['error'] = str(exc)
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = {'error': str(exc)}
+    threading.Thread(target=runner, daemon=True).start()
+    return jsonify({'ok': True, 'task_id': task_id})
 
 
 @app.delete('/api/credentials/<cred_id>')
@@ -1348,7 +1530,59 @@ def api_delete_credential(cred_id: str):
     conn.execute('UPDATE credential_store SET archived = 1, updated_at = ? WHERE id = ?', (now_iso(), cred_id))
     conn.commit()
     conn.close()
-    return jsonify({'ok': True, 'credentials': list_credentials()})
+    cpas = load_cpas()
+    return jsonify({'ok': True, 'credentials': serialize_credentials_for_list(cpas), 'cpas': cpas})
+
+
+def _deploy_credentials_to_target(target: dict[str, Any], credential_ids: list[str], progress: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not credential_ids:
+        return {'error': '没有选择凭证', 'status': 400}
+    conn = get_conn()
+    qmarks = ','.join('?' for _ in credential_ids)
+    rows = [dict(r) for r in conn.execute(f'SELECT * FROM credential_store WHERE archived = 0 AND id IN ({qmarks})', tuple(credential_ids)).fetchall()]
+    now = now_iso()
+    if progress is not None:
+        progress['stage'] = '正在上传到 CPA'
+        progress['total'] = len(rows)
+        progress['scanned'] = 0
+        progress['success'] = 0
+        progress['failed'] = 0
+        progress['skipped'] = 0
+        progress['percent'] = 0
+    def worker(row: dict[str, Any]) -> dict[str, Any]:
+        name = row.get('filename') or row.get('name') or f"{row['id']}.json"
+        result = upload_cpa_auth_file(target, name, row.get('content') or '')
+        ok = bool(result.get('ok'))
+        return {
+            'id': row['id'],
+            'name': row['name'],
+            'filename': name,
+            'ok': ok,
+            'status_code': result.get('status_code'),
+            'text': result.get('text'),
+            'mode': result.get('mode'),
+        }
+    results = []
+    with ThreadPoolExecutor(max_workers=max(1, min(MAX_BULK_WORKERS, len(rows) or 1))) as pool:
+        fut_map = {pool.submit(worker, row): row for row in rows}
+        for fut in as_completed(fut_map):
+            item = fut.result()
+            results.append(item)
+            if progress is not None:
+                progress['scanned'] = int(progress.get('scanned') or 0) + 1
+                if item.get('ok'):
+                    progress['success'] = int(progress.get('success') or 0) + 1
+                else:
+                    progress['failed'] = int(progress.get('failed') or 0) + 1
+                total = max(int(progress.get('total') or 0), 1)
+                progress['percent'] = round((int(progress.get('scanned') or 0) / total) * 100)
+    for item in results:
+        if item.get('ok'):
+            conn.execute('UPDATE credential_store SET last_used_at = ?, last_target_id = ?, uploaded_to_cpa = 1, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (now, target['id'], '可用 / 限额', '', now, item['id']))
+    conn.commit()
+    conn.close()
+    cpas = load_cpas()
+    return {'results': results, 'credentials': serialize_credentials_for_list(cpas), 'cpas': cpas, 'cpa': cpa_summary(target)}
 
 
 @app.post('/api/credentials/deploy')
@@ -1359,23 +1593,54 @@ def api_deploy_credentials():
     target = next((x for x in load_cpas() if x['id'] == target_id), None)
     if not target:
         return jsonify({'error': '目标 CPA 不存在'}), 404
-    if not credential_ids:
-        return jsonify({'error': '没有选择凭证'}), 400
-    conn = get_conn()
-    qmarks = ','.join('?' for _ in credential_ids)
-    rows = [dict(r) for r in conn.execute(f'SELECT * FROM credential_store WHERE archived = 0 AND id IN ({qmarks})', tuple(credential_ids)).fetchall()]
-    results = []
-    now = now_iso()
-    for row in rows:
-        name = row.get('filename') or row.get('name') or f"{row['id']}.json"
-        result = upload_cpa_auth_file(target, name, row.get('content') or '')
-        ok = bool(result.get('ok'))
-        results.append({'id': row['id'], 'name': row['name'], 'filename': name, 'ok': ok, 'status_code': result.get('status_code'), 'text': result.get('text'), 'mode': result.get('mode')})
-        if ok:
-            conn.execute('UPDATE credential_store SET last_used_at = ?, last_target_id = ?, uploaded_to_cpa = 1, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE id = ?', (now, target_id, '可用 / 限额', '', now, row['id']))
-    conn.commit()
-    conn.close()
-    return jsonify({'results': results, 'credentials': list_credentials(), 'cpa': cpa_summary(target)})
+    result = _deploy_credentials_to_target(target, credential_ids)
+    if result.get('error'):
+        return jsonify({'error': result['error']}), int(result.get('status') or 400)
+    return jsonify(result)
+
+
+@app.post('/api/credentials/deploy-bulk')
+def api_deploy_credentials_bulk():
+    data = request.get_json(force=True) or {}
+    target_id = str(data.get('target_id') or '').strip()
+    credential_ids = data.get('credential_ids') or []
+    target = next((x for x in load_cpas() if x['id'] == target_id), None)
+    if not target:
+        return jsonify({'error': '目标 CPA 不存在'}), 404
+    result = _deploy_credentials_to_target(target, credential_ids)
+    if result.get('error'):
+        return jsonify({'error': result['error']}), int(result.get('status') or 400)
+    return jsonify(result)
+
+
+@app.post('/api/credentials/deploy-bulk/start')
+def api_deploy_credentials_bulk_start():
+    data = request.get_json(force=True) or {}
+    target_id = str(data.get('target_id') or '').strip()
+    credential_ids = data.get('credential_ids') or []
+    target = next((x for x in load_cpas() if x['id'] == target_id), None)
+    if not target:
+        return jsonify({'error': '目标 CPA 不存在'}), 404
+    task_id = uuid.uuid4().hex[:16]
+    progress = {'task_id': task_id, 'type': 'deploy-bulk', 'stage': '已创建上传到 CPA 任务', 'total': 0, 'scanned': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'percent': 0, 'done': False, 'ok': False, 'error': None, 'elapsed_ms': 0}
+    refresh_progress_store[task_id] = progress
+    def runner():
+        started = time.time()
+        try:
+            result = _deploy_credentials_to_target(target, credential_ids, progress=progress)
+            progress['done'] = True
+            progress['ok'] = True
+            progress['percent'] = 100
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = result
+        except Exception as exc:
+            progress['done'] = True
+            progress['ok'] = False
+            progress['error'] = str(exc)
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = {'error': str(exc)}
+    threading.Thread(target=runner, daemon=True).start()
+    return jsonify({'ok': True, 'task_id': task_id})
 
 
 @app.get('/api/cpas/<cpa_id>')
@@ -1384,6 +1649,42 @@ def api_get_cpa(cpa_id: str):
     if not target:
         return jsonify({'error': 'CPA 不存在'}), 404
     return jsonify({'cpa': cpa_summary(target, live=False)})
+
+
+
+@app.post('/api/cpas/<cpa_id>/refresh/start')
+def api_refresh_cpa_start(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    task_id = uuid.uuid4().hex[:16]
+    progress = {'task_id': task_id, 'cpa_id': cpa_id, 'stage': '已创建刷新任务', 'total': 0, 'scanned': 0, 'percent': 0, 'done': False, 'ok': False, 'error': None, 'elapsed_ms': 0}
+    refresh_progress_store[task_id] = progress
+    def runner():
+        started = time.time()
+        try:
+            result = native_refresh_cpa(target, progress=progress)
+            progress['done'] = True
+            progress['ok'] = True
+            progress['percent'] = 100
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = {'ok': True, 'scan': {'mode': 'native-refresh', 'metrics': result.get('metrics', {})}, 'cpa': result.get('summary') or cpa_summary(target, live=False), 'elapsed_ms': progress['elapsed_ms']}
+        except Exception as exc:
+            progress['done'] = True
+            progress['ok'] = False
+            progress['error'] = str(exc)
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = {'error': str(exc), 'cpa': cpa_summary(target, live=False), 'elapsed_ms': progress['elapsed_ms']}
+    threading.Thread(target=runner, daemon=True).start()
+    return jsonify({'ok': True, 'task_id': task_id})
+
+
+@app.get('/api/cpas/refresh/<task_id>')
+def api_refresh_cpa_progress(task_id: str):
+    progress = refresh_progress_store.get(task_id)
+    if not progress:
+        return jsonify({'error': '刷新任务不存在'}), 404
+    return jsonify(progress)
 
 
 @app.post('/api/cpas/<cpa_id>/refresh')
@@ -1404,14 +1705,154 @@ def api_delete_cpa_auth_file(cpa_id: str, file_name: str):
     target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
     if not target:
         return jsonify({'error': 'CPA 不存在'}), 404
-    result = delete_cpa_auth_file(target, file_name)
-    if result.get('ok'):
-        conn = get_conn()
-        conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE archived = 0 AND last_target_id = ? AND filename = ?', ('', '', now_iso(), cpa_id, urllib.parse.unquote(file_name)))
-        conn.commit()
-        conn.close()
+    bulk = _bulk_delete_cpa_auth_files(target, [file_name])
+    result = (bulk.get('results') or [{}])[0]
     code = 200 if result.get('ok') else 500
-    return jsonify({'result': result, 'cpa': cpa_summary(target), 'credentials': list_credentials()}), code
+    return jsonify({'result': result, 'cpa': bulk.get('cpa'), 'credentials': bulk.get('credentials'), 'cpas': bulk.get('cpas')}), code
+
+
+@app.post('/api/cpas/<cpa_id>/auth-files/bulk-delete')
+def api_bulk_delete_cpa_auth_files(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    data = request.get_json(force=True) or {}
+    result = _bulk_delete_cpa_auth_files(target, data.get('file_names') or [])
+    if result.get('error'):
+        return jsonify({'error': result['error']}), int(result.get('status') or 400)
+    return jsonify(result)
+
+
+@app.post('/api/cpas/<cpa_id>/auth-files/bulk-delete/start')
+def api_bulk_delete_cpa_auth_files_start(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    data = request.get_json(force=True) or {}
+    file_names = data.get('file_names') or []
+    task_id = uuid.uuid4().hex[:16]
+    progress = {'task_id': task_id, 'type': 'bulk-delete', 'cpa_id': cpa_id, 'stage': '已创建删除任务', 'total': 0, 'scanned': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'percent': 0, 'done': False, 'ok': False, 'error': None, 'elapsed_ms': 0}
+    refresh_progress_store[task_id] = progress
+    def runner():
+        started = time.time()
+        try:
+            result = _bulk_delete_cpa_auth_files(target, file_names, progress=progress)
+            progress['done'] = True
+            progress['ok'] = True
+            progress['percent'] = 100
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = result
+        except Exception as exc:
+            progress['done'] = True
+            progress['ok'] = False
+            progress['error'] = str(exc)
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = {'error': str(exc)}
+    threading.Thread(target=runner, daemon=True).start()
+    return jsonify({'ok': True, 'task_id': task_id})
+
+
+def _bulk_save_cpa_auth_files_to_store(target: dict[str, Any], file_names: list[str], progress: dict[str, Any] | None = None) -> dict[str, Any]:
+    decoded_names = [urllib.parse.unquote(str(x or '').strip()) for x in file_names if str(x or '').strip()]
+    if not decoded_names:
+        return {'error': '没有选择凭证', 'status': 400}
+    if progress is not None:
+        progress['stage'] = '正在拉取并上传到仓库'
+        progress['total'] = len(decoded_names)
+        progress['scanned'] = 0
+        progress['success'] = 0
+        progress['failed'] = 0
+        progress['skipped'] = 0
+        progress['percent'] = 0
+    def worker(name: str) -> dict[str, Any]:
+        fetched = fetch_cpa_auth_file_content(target, name)
+        return {'name': name, 'fetched': fetched}
+    fetched_results = []
+    with ThreadPoolExecutor(max_workers=max(1, min(MAX_BULK_WORKERS, len(decoded_names)))) as pool:
+        fut_map = {pool.submit(worker, name): name for name in decoded_names}
+        for fut in as_completed(fut_map):
+            item = fut.result()
+            fetched_results.append(item)
+            if progress is not None:
+                progress['scanned'] = int(progress.get('scanned') or 0) + 1
+                if item.get('fetched', {}).get('ok'):
+                    progress['success'] = int(progress.get('success') or 0) + 1
+                else:
+                    progress['failed'] = int(progress.get('failed') or 0) + 1
+                total = max(int(progress.get('total') or 0), 1)
+                progress['percent'] = round((int(progress.get('scanned') or 0) / total) * 100)
+    items = []
+    failed = []
+    for item in fetched_results:
+        fetched = item['fetched']
+        if not fetched.get('ok'):
+            failed.append({'name': item['name'], 'error': fetched.get('text') or '拉取凭证失败', 'status_code': fetched.get('status_code')})
+            continue
+        items.append({
+            'name': item['name'],
+            'filename': item['name'],
+            'content': fetched.get('text') or '',
+            'note': f"from-cpa:{target.get('name')}",
+            'tags': 'from-cpa',
+        })
+    result = save_credentials_to_store(items)
+    if progress is not None:
+        progress['success'] = len(result.get('saved', []))
+        progress['skipped'] = len(result.get('skipped', []))
+        progress['failed'] = len(failed)
+        progress['percent'] = 100
+        progress['stage'] = '正在汇总上传仓库结果'
+    cpas = load_cpas()
+    return {
+        'ok': True,
+        'saved': result.get('saved', []),
+        'skipped': result.get('skipped', []),
+        'failed': failed,
+        'dedupe_removed': result.get('dedupe_removed', 0),
+        'credentials': serialize_credentials_for_list(cpas),
+        'cpas': cpas,
+        'cpa': cpa_summary(target),
+    }
+
+
+def _bulk_delete_cpa_auth_files(target: dict[str, Any], file_names: list[str], progress: dict[str, Any] | None = None) -> dict[str, Any]:
+    decoded_names = [urllib.parse.unquote(str(x or '').strip()) for x in file_names if str(x or '').strip()]
+    if not decoded_names:
+        return {'error': '没有选择凭证', 'status': 400}
+    if progress is not None:
+        progress['stage'] = '正在删除 CPA 凭证'
+        progress['total'] = len(decoded_names)
+        progress['scanned'] = 0
+        progress['success'] = 0
+        progress['failed'] = 0
+        progress['skipped'] = 0
+        progress['percent'] = 0
+    def worker(name: str) -> dict[str, Any]:
+        res = delete_cpa_auth_file(target, name)
+        return {'name': name, 'ok': bool(res.get('ok')), 'status_code': res.get('status_code'), 'text': res.get('text')}
+    results = []
+    with ThreadPoolExecutor(max_workers=max(1, min(MAX_BULK_WORKERS, len(decoded_names)))) as pool:
+        fut_map = {pool.submit(worker, name): name for name in decoded_names}
+        for fut in as_completed(fut_map):
+            item = fut.result()
+            results.append(item)
+            if progress is not None:
+                progress['scanned'] = int(progress.get('scanned') or 0) + 1
+                if item.get('ok'):
+                    progress['success'] = int(progress.get('success') or 0) + 1
+                else:
+                    progress['failed'] = int(progress.get('failed') or 0) + 1
+                total = max(int(progress.get('total') or 0), 1)
+                progress['percent'] = round((int(progress.get('scanned') or 0) / total) * 100)
+    conn = get_conn()
+    now = now_iso()
+    for item in results:
+        if item.get('ok'):
+            conn.execute('UPDATE credential_store SET uploaded_to_cpa = 0, upload_status_text = ?, upload_error_detail = ?, updated_at = ? WHERE archived = 0 AND last_target_id = ? AND filename = ?', ('', '', now, target['id'], item['name']))
+    conn.commit()
+    conn.close()
+    cpas = load_cpas()
+    return {'ok': True, 'results': results, 'credentials': serialize_credentials_for_list(cpas), 'cpas': cpas, 'cpa': cpa_summary(target)}
 
 
 @app.post('/api/cpas/<cpa_id>/auth-files/<path:file_name>/save-to-store')
@@ -1419,25 +1860,51 @@ def api_save_cpa_auth_file_to_store(cpa_id: str, file_name: str):
     target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
     if not target:
         return jsonify({'error': 'CPA 不存在'}), 404
-    decoded_name = urllib.parse.unquote(file_name)
-    fetched = fetch_cpa_auth_file_content(target, decoded_name)
-    if not fetched.get('ok'):
-        return jsonify({'error': fetched.get('text') or '拉取凭证失败', 'result': fetched}), 500
-    result = save_credentials_to_store([{
-        'name': decoded_name,
-        'filename': decoded_name,
-        'content': fetched.get('text') or '',
-        'note': f"from-cpa:{target.get('name')}",
-        'tags': 'from-cpa',
-    }])
-    return jsonify({
-        'ok': True,
-        'saved': result.get('saved', []),
-        'skipped': result.get('skipped', []),
-        'dedupe_removed': result.get('dedupe_removed', 0),
-        'credentials': list_credentials(),
-        'cpa': cpa_summary(target),
-    })
+    result = _bulk_save_cpa_auth_files_to_store(target, [file_name])
+    if result.get('error'):
+        return jsonify({'error': result['error']}), int(result.get('status') or 400)
+    return jsonify(result)
+
+
+@app.post('/api/cpas/<cpa_id>/auth-files/bulk-save-to-store')
+def api_bulk_save_cpa_auth_files_to_store(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    data = request.get_json(force=True) or {}
+    result = _bulk_save_cpa_auth_files_to_store(target, data.get('file_names') or [])
+    if result.get('error'):
+        return jsonify({'error': result['error']}), int(result.get('status') or 400)
+    return jsonify(result)
+
+
+@app.post('/api/cpas/<cpa_id>/auth-files/bulk-save-to-store/start')
+def api_bulk_save_cpa_auth_files_to_store_start(cpa_id: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    data = request.get_json(force=True) or {}
+    file_names = data.get('file_names') or []
+    task_id = uuid.uuid4().hex[:16]
+    progress = {'task_id': task_id, 'type': 'bulk-save-to-store', 'cpa_id': cpa_id, 'stage': '已创建上传仓库任务', 'total': 0, 'scanned': 0, 'success': 0, 'failed': 0, 'skipped': 0, 'percent': 0, 'done': False, 'ok': False, 'error': None, 'elapsed_ms': 0}
+    refresh_progress_store[task_id] = progress
+    def runner():
+        started = time.time()
+        try:
+            result = _bulk_save_cpa_auth_files_to_store(target, file_names, progress=progress)
+            progress['done'] = True
+            progress['ok'] = True
+            progress['percent'] = 100
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = result
+        except Exception as exc:
+            progress['done'] = True
+            progress['ok'] = False
+            progress['error'] = str(exc)
+            progress['elapsed_ms'] = int((time.time() - started) * 1000)
+            progress['result'] = {'error': str(exc)}
+    threading.Thread(target=runner, daemon=True).start()
+    return jsonify({'ok': True, 'task_id': task_id})
 
 
 @app.get('/api/cpas/<cpa_id>/auth-files/<path:file_name>/export')
