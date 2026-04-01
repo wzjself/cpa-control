@@ -17,6 +17,12 @@ Before doing anything else:
 
 Don't ask permission. Just do it.
 
+### Codex compatibility note
+
+- `BOOTSTRAP.md` is only for the very first conversation. Once identity/setup is complete, remove or archive it.
+- Keep today's `memory/YYYY-MM-DD.md` present when possible.
+- In this workspace, stale `BOOTSTRAP.md` plus missing today's memory file can confuse Codex CLI startup/context loading.
+
 ## Memory
 
 You wake up fresh each session. These files are your continuity:
