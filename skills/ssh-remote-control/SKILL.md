@@ -15,11 +15,22 @@ Use this skill when the user wants work done on another server over SSH.
 ## What to do
 
 - Use `exec` with `ssh` for remote commands.
+- Read and use the remote command output. Treat stdout/stderr returned by SSH as the primary evidence for diagnosis, status checks, and next actions.
 - Prefer existing SSH config, known host entries, and keys already present on the machine.
 - Check `TOOLS.md` for host aliases or notes if relevant.
 - If the target host is unclear, identify likely SSH details from local config/files before asking.
 - For a quick diagnosis, start with safe read-only commands.
 - For persistent services on the remote server, prefer `systemctl status`, logs, port checks, and config inspection before restarting.
+
+## Reading remote output
+
+After sending an SSH command, inspect the returned output before deciding the next step.
+
+- Use returned status text, logs, and command output to explain what is happening on the remote host.
+- If a command fails, include the key error line in your reasoning and choose the next command based on that output.
+- When useful, capture both stdout and stderr.
+- For long output, use targeted commands like `tail`, `sed -n`, `journalctl -n`, `docker logs --tail`, or `grep` to keep the result readable.
+- If the user wants an interactive CLI over SSH, use a PTY-backed `exec` session when needed and continue reading output from that session.
 
 ## Command pattern
 
