@@ -111,6 +111,15 @@
 
   </div>
 
+  <aside id="progressPanel" class="progress-panel" aria-live="polite">
+    <div class="progress-panel-head">
+      <strong>跨网络状态</strong>
+      <button id="clearProgressLogBtn" type="button" class="ghost small-btn">清空</button>
+    </div>
+    <div id="progressPanelHint" class="muted">显示上传到 CPA、刷新 CPA、仓库同步等实时进度</div>
+    <div id="progressLogList" class="progress-log-list"></div>
+  </aside>
+
   <div id="uiNotice" class="ui-notice hidden" aria-live="polite">
     <div class="ui-notice-card">
       <div class="ui-notice-head">
@@ -121,6 +130,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=20260401cpa26"></script>
+  <script src="/static/app.js?v=20260401cpa27"></script>
 </body>
 </html>
