@@ -1092,6 +1092,78 @@ def upload_cpa_auth_file(target: dict[str, Any], file_name: str, content: str) -
         return {'ok': False, 'status_code': None, 'text': str(exc), 'mode': 'raw-json'}
 
 
+def fetch_cpa_auth_file_content(target: dict[str, Any], name: str) -> dict[str, Any]:
+    base = target['base_url'].rstrip('/')
+    raw_url = f"{base}/v0/management/auth-files?name={urllib.parse.quote(name, safe='')}"
+    try:
+        r = requests.get(raw_url, headers=mgmt_headers(target['token']), timeout=30)
+        content_type = str(r.headers.get('content-type') or '').lower()
+        body_text = r.text or ''
+        payload = None
+        if 'application/json' in content_type:
+            try:
+                payload = r.json()
+            except Exception:
+                payload = None
+        if isinstance(payload, dict):
+            if isinstance(payload.get('content'), str):
+                body_text = payload.get('content') or ''
+            elif isinstance(payload.get('file'), dict) and isinstance(payload['file'].get('content'), str):
+                body_text = payload['file'].get('content') or ''
+            elif isinstance(payload.get('data'), dict) and isinstance(payload['data'].get('content'), str):
+                body_text = payload['data'].get('content') or ''
+        return {'ok': r.ok, 'status_code': r.status_code, 'text': body_text, 'content_type': content_type}
+    except Exception as exc:
+        return {'ok': False, 'status_code': None, 'text': str(exc), 'content_type': ''}
+
+
+def save_credentials_to_store(items: list[dict[str, Any]], conn: sqlite3.Connection | None = None) -> dict[str, Any]:
+    own_conn = False
+    if conn is None:
+        conn = get_conn()
+        own_conn = True
+    saved = []
+    skipped = []
+    now = now_iso()
+    dedupe = cleanup_duplicate_credentials(conn)
+    existing_rows = [dict(r) for r in conn.execute("SELECT name, filename FROM credential_store WHERE archived = 0").fetchall()]
+    existing_keys = {credential_dedupe_key(r) for r in existing_rows if credential_dedupe_key(r)}
+    for item in items:
+        content = str(item.get('content') or '').strip()
+        if not content:
+            continue
+        cred_id = uuid.uuid4().hex[:16]
+        filename = str(item.get('filename') or item.get('name') or f'{cred_id}.json').strip()
+        name = str(item.get('name') or filename).strip()
+        dedupe_key = credential_dedupe_key({'name': name, 'filename': filename})
+        if dedupe_key and dedupe_key in existing_keys:
+            skipped.append({'name': name, 'filename': filename, 'reason': 'duplicate_name'})
+            continue
+        row = {
+            'id': cred_id,
+            'name': name,
+            'filename': filename,
+            'content': content,
+            'note': str(item.get('note') or ''),
+            'tags': str(item.get('tags') or ''),
+            'uploaded_at': now,
+            'updated_at': now,
+            'last_used_at': None,
+            'last_target_id': None,
+            'uploaded_to_cpa': 0,
+            'upload_status_text': '',
+            'upload_error_detail': '',
+            'archived': 0,
+        }
+        conn.execute('INSERT INTO credential_store (id,name,filename,content,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,uploaded_to_cpa,upload_status_text,upload_error_detail,archived) VALUES (:id,:name,:filename,:content,:note,:tags,:uploaded_at,:updated_at,:last_used_at,:last_target_id,:uploaded_to_cpa,:upload_status_text,:upload_error_detail,:archived)', row)
+        existing_keys.add(dedupe_key)
+        saved.append({'id': cred_id, 'name': name, 'filename': filename})
+    if own_conn:
+        conn.commit()
+        conn.close()
+    return {'saved': saved, 'skipped': skipped, 'dedupe_removed': int((dedupe or {}).get('removed') or 0)}
+
+
 def delete_cpa_auth_file(target: dict[str, Any], name: str) -> dict[str, Any]:
     url = f"{target['base_url'].rstrip('/')}/v0/management/auth-files?name={urllib.parse.quote(name, safe='')}"
     r = requests.delete(url, headers=mgmt_headers(target['token']), timeout=30)
@@ -1266,46 +1338,8 @@ def api_import_credentials():
     items = data.get('items') or []
     if not isinstance(items, list) or not items:
         return jsonify({'error': '没有可导入的凭证'}), 400
-    conn = get_conn()
-    saved = []
-    skipped = []
-    now = now_iso()
-    dedupe = cleanup_duplicate_credentials(conn)
-    existing_rows = [dict(r) for r in conn.execute("SELECT name, filename FROM credential_store WHERE archived = 0").fetchall()]
-    existing_keys = {credential_dedupe_key(r) for r in existing_rows if credential_dedupe_key(r)}
-    for item in items:
-        content = str(item.get('content') or '').strip()
-        if not content:
-            continue
-        cred_id = uuid.uuid4().hex[:16]
-        filename = str(item.get('filename') or item.get('name') or f'{cred_id}.json').strip()
-        name = str(item.get('name') or filename).strip()
-        dedupe_key = credential_dedupe_key({'name': name, 'filename': filename})
-        if dedupe_key and dedupe_key in existing_keys:
-            skipped.append({'name': name, 'filename': filename, 'reason': 'duplicate_name'})
-            continue
-        row = {
-            'id': cred_id,
-            'name': name,
-            'filename': filename,
-            'content': content,
-            'note': str(item.get('note') or ''),
-            'tags': str(item.get('tags') or ''),
-            'uploaded_at': now,
-            'updated_at': now,
-            'last_used_at': None,
-            'last_target_id': None,
-            'uploaded_to_cpa': 0,
-            'upload_status_text': '',
-            'upload_error_detail': '',
-            'archived': 0,
-        }
-        conn.execute('INSERT INTO credential_store (id,name,filename,content,note,tags,uploaded_at,updated_at,last_used_at,last_target_id,uploaded_to_cpa,upload_status_text,upload_error_detail,archived) VALUES (:id,:name,:filename,:content,:note,:tags,:uploaded_at,:updated_at,:last_used_at,:last_target_id,:uploaded_to_cpa,:upload_status_text,:upload_error_detail,:archived)', row)
-        existing_keys.add(dedupe_key)
-        saved.append({'id': cred_id, 'name': name, 'filename': filename})
-    conn.commit()
-    conn.close()
-    return jsonify({'saved': saved, 'skipped': skipped, 'dedupe_removed': dedupe.get('removed', 0), 'credentials': list_credentials()})
+    result = save_credentials_to_store(items)
+    return jsonify({'saved': result.get('saved', []), 'skipped': result.get('skipped', []), 'dedupe_removed': result.get('dedupe_removed', 0), 'credentials': list_credentials()})
 
 
 @app.delete('/api/credentials/<cred_id>')
@@ -1378,6 +1412,48 @@ def api_delete_cpa_auth_file(cpa_id: str, file_name: str):
         conn.close()
     code = 200 if result.get('ok') else 500
     return jsonify({'result': result, 'cpa': cpa_summary(target), 'credentials': list_credentials()}), code
+
+
+@app.post('/api/cpas/<cpa_id>/auth-files/<path:file_name>/save-to-store')
+def api_save_cpa_auth_file_to_store(cpa_id: str, file_name: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    decoded_name = urllib.parse.unquote(file_name)
+    fetched = fetch_cpa_auth_file_content(target, decoded_name)
+    if not fetched.get('ok'):
+        return jsonify({'error': fetched.get('text') or '拉取凭证失败', 'result': fetched}), 500
+    result = save_credentials_to_store([{
+        'name': decoded_name,
+        'filename': decoded_name,
+        'content': fetched.get('text') or '',
+        'note': f"from-cpa:{target.get('name')}",
+        'tags': 'from-cpa',
+    }])
+    return jsonify({
+        'ok': True,
+        'saved': result.get('saved', []),
+        'skipped': result.get('skipped', []),
+        'dedupe_removed': result.get('dedupe_removed', 0),
+        'credentials': list_credentials(),
+        'cpa': cpa_summary(target),
+    })
+
+
+@app.get('/api/cpas/<cpa_id>/auth-files/<path:file_name>/export')
+def api_export_single_cpa_auth_file(cpa_id: str, file_name: str):
+    target = next((x for x in load_cpas() if x['id'] == cpa_id), None)
+    if not target:
+        return jsonify({'error': 'CPA 不存在'}), 404
+    decoded_name = urllib.parse.unquote(file_name)
+    fetched = fetch_cpa_auth_file_content(target, decoded_name)
+    if not fetched.get('ok'):
+        return jsonify({'error': fetched.get('text') or '拉取凭证失败', 'result': fetched}), 500
+    return Response(
+        fetched.get('text') or '',
+        mimetype='application/json',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{urllib.parse.quote(decoded_name)}"},
+    )
 
 
 def match_account_by_kind(acc: dict[str, Any], kind: str) -> bool:
