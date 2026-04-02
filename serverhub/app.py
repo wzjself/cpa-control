@@ -309,9 +309,21 @@ def get_metric_summary(history_hours: int | None = 24, clirelay: dict[str, Any] 
     history = get_metric_history(history_hours, max_points=history_max_points)
     latest = history[-1] if history else collect_sample()
     totals = {'rx_mb': 0.0, 'tx_mb': 0.0}
-    if history:
-        totals['rx_mb'] = round(history[-1]['net_rx_mb'] - history[0]['net_rx_mb'], 2)
-        totals['tx_mb'] = round(history[-1]['net_tx_mb'] - history[0]['net_tx_mb'], 2)
+    if len(history) >= 2:
+        rx_total = 0.0
+        tx_total = 0.0
+        for prev, cur in zip(history, history[1:]):
+            try:
+                rx_diff = float(cur.get('net_rx_mb') or 0) - float(prev.get('net_rx_mb') or 0)
+                tx_diff = float(cur.get('net_tx_mb') or 0) - float(prev.get('net_tx_mb') or 0)
+            except Exception:
+                continue
+            if rx_diff > 0:
+                rx_total += rx_diff
+            if tx_diff > 0:
+                tx_total += tx_diff
+        totals['rx_mb'] = round(rx_total, 2)
+        totals['tx_mb'] = round(tx_total, 2)
     current_rx_kbps = 0.0
     current_tx_kbps = 0.0
     if len(history) >= 2:

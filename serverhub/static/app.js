@@ -58,6 +58,7 @@ const fmtPct = n => `${Number(n ?? 0).toFixed(1)}%`;
 const fmtMaybePct = n => (n === null || n === undefined || Number.isNaN(Number(n))) ? '未知' : `${Number(n).toFixed(1)}%`;
 const fmtNum = n => new Intl.NumberFormat('zh-CN').format(Number(n || 0));
 const fmtMb = n => `${Number(n || 0).toFixed(1)} MB`;
+const fmtGb = n => `${(Number(n || 0) / 1024).toFixed(2)} GB`;
 const fmtKbps = n => `${Number(n || 0).toFixed(1)} KB/s`;
 const setText = (el, value) => { if (!el) return; const next = String(value ?? ''); if (el.textContent !== next) el.textContent = next; };
 const rangeLabel = key => ({'3h':'3小时','24h':'24小时','7d':'7天','30d':'30天','all':'所有时间'}[key] || '24小时');
@@ -425,7 +426,7 @@ function renderServer(server, relay = {}, options = {}) {
   setText(els.memNow, fmtPct(server.latest.mem_percent));
   setText(els.diskNow, fmtPct(server.latest.disk_percent));
   setText(els.netRateNow, `${fmtKbps(server.current_net_kbps?.rx)} / ${fmtKbps(server.current_net_kbps?.tx)}`);
-  setText(els.trafficNow, `${fmtMb(server.traffic_24h.rx_mb)} / ${fmtMb(server.traffic_24h.tx_mb)}`);
+  setText(els.trafficNow, `${fmtGb(server.traffic_24h.rx_mb)} / ${fmtGb(server.traffic_24h.tx_mb)}`);
   setText(els.relayRequestNow, fmtNum(relay.request_count || 0));
   setText(els.relayTokenNow, fmtNum(relay.total_tokens || 0));
   setText(els.relayRateNow, `${fmtNum(relay.rpm || 0)} / ${fmtNum(relay.tpm || 0)}`);
