@@ -55,7 +55,19 @@ cd cpa-control
 bash install.sh
 ```
 
-### 方式二：手动启动
+### 方式二：使用发布包
+仓库内已提供干净发布包：
+- `release/cpa-control.tar.gz`
+
+也可以直接从 GitHub 下载后解压安装：
+```bash
+curl -L https://github.com/wzjself/cpa-control/raw/master/serverhub/release/cpa-control.tar.gz -o cpa-control.tar.gz
+tar -xzf cpa-control.tar.gz
+cd cpa-control
+bash install.sh
+```
+
+### 方式三：手动启动
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
