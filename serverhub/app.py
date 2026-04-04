@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import urllib.parse
 import shutil
@@ -55,10 +56,15 @@ def now_iso() -> str:
 
 
 def mgmt_headers(token: str, include_json: bool = False) -> dict[str, str]:
+    token = str(token or '').strip()
     headers = {
-        'Authorization': f'Bearer {token}',
         'Accept': 'application/json, text/plain, */*',
     }
+    if token:
+        # Newer CLIProxyAPI management endpoints require x-management-key.
+        # Keep Authorization as a compatibility fallback for older deployments.
+        headers['x-management-key'] = token
+        headers['Authorization'] = f'Bearer {token}'
     if include_json:
         headers['Content-Type'] = 'application/json'
     return headers
@@ -580,11 +586,20 @@ def build_credential_cpa_presence(cpas: list[dict[str, Any]]) -> dict[str, list[
             key = normalize_credential_name(acc.get('email') or acc.get('name') or '')
             if not key:
                 continue
+            remaining_ratio = acc.get('remaining_ratio')
+            exhausted_by_ratio = False
+            try:
+                exhausted_by_ratio = remaining_ratio is not None and float(remaining_ratio) <= 0
+            except Exception:
+                exhausted_by_ratio = False
             if acc.get('invalid_401'):
                 status_text = '401失效'
                 good = False
-            elif acc.get('quota_limited') or str(acc.get('status') or '').lower() == 'active':
-                status_text = '可用 / 限额'
+            elif acc.get('quota_limited') or exhausted_by_ratio:
+                status_text = '额度耗尽'
+                good = False
+            elif str(acc.get('status') or '').lower() == 'active':
+                status_text = '正常'
                 good = True
             else:
                 status_text = '异常'
@@ -800,10 +815,33 @@ def extract_quota_reset_at(rate_limit: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _extract_chatgpt_account_id(item: dict[str, Any]) -> str:
+    candidates = [
+        item.get('id_token'),
+        (item.get('metadata') or {}).get('id_token') if isinstance(item.get('metadata'), dict) else None,
+        (item.get('attributes') or {}).get('id_token') if isinstance(item.get('attributes'), dict) else None,
+    ]
+    for src in candidates:
+        if isinstance(src, dict):
+            value = str(src.get('chatgpt_account_id') or src.get('chatgptAccountId') or '').strip()
+            if value:
+                return value
+        elif isinstance(src, str) and src.count('.') >= 1:
+            try:
+                payload = src.split('.')[1]
+                payload += '=' * (-len(payload) % 4)
+                data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+                value = str(data.get('chatgpt_account_id') or data.get('chatgptAccountId') or '').strip()
+                if value:
+                    return value
+            except Exception:
+                pass
+    return str(item.get('chatgpt_account_id') or '').strip()
+
+
 def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
     auth_index = str(item.get('auth_index') or '').strip()
-    id_token = item.get('id_token') or {}
-    account_id = str(id_token.get('chatgpt_account_id') or item.get('chatgpt_account_id') or '').strip()
+    account_id = _extract_chatgpt_account_id(item)
     cache_key = f"{target.get('id')}::{item.get('name')}::{auth_index}::{account_id}"
     now_ts = time.time()
     cached = quota_probe_cache.get(cache_key)
@@ -818,12 +856,12 @@ def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, A
         'header': {
             'Authorization': 'Bearer $TOKEN$',
             'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0',
+            'User-Agent': 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal',
             'Chatgpt-Account-Id': account_id,
         },
     }
     url = f"{target['base_url'].rstrip('/')}/v0/management/api-call"
-    r = requests.post(url, headers=mgmt_headers(target['token'], include_json=True), json=payload, timeout=12)
+    r = requests.post(url, headers=mgmt_headers(target['token'], include_json=True), json=payload, timeout=15)
     r.raise_for_status()
     outer = r.json()
     if not isinstance(outer, dict) or outer.get('status_code') != 200:
@@ -842,7 +880,7 @@ def probe_cpa_quota(target: dict[str, Any], item: dict[str, Any]) -> dict[str, A
         'remaining_ratio': round(remaining * 100, 2) if remaining is not None else None,
         'quota_limited': bool(rate_limit.get('limit_reached')) if isinstance(rate_limit, dict) else False,
         'plan_type': str(body.get('plan_type') or item.get('plan_type') or ((item.get('id_token') or {}).get('plan_type')) or 'unknown').lower(),
-        'quota_signal_source': 'wham-usage',
+        'quota_signal_source': 'codex-wham-usage',
         'quota_checked_at': now_iso(),
         'quota_reset_at': extract_quota_reset_at(rate_limit),
         'cached_at_ts': now_ts,
@@ -912,7 +950,6 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
     error_type = extract_status_message_error_type(msg)
     api_status_code = item.get('api_status_code')
     invalid_401 = str(api_status_code or '') == '401' or error_type in {'401', 'unauthorized', 'invalid_api_key', 'token_expired'}
-    quota_limited = (not invalid_401) and (bool(item.get('usage_limit_reached')) or error_type in {'usage_limit_reached', 'rate_limit', 'quota'})
     remaining_ratio = None
     ratio_value = item.get('quota_remaining_ratio') if item.get('quota_remaining_ratio') is not None else item.get('usage_remaining_ratio')
     if ratio_value is not None:
@@ -920,6 +957,11 @@ def classify_cpa_file(item: dict[str, Any]) -> dict[str, Any]:
             remaining_ratio = round(float(ratio_value) * 100, 2)
         except Exception:
             remaining_ratio = None
+    quota_limited = (not invalid_401) and (
+        bool(item.get('usage_limit_reached'))
+        or error_type in {'usage_limit_reached', 'rate_limit', 'quota'}
+        or (remaining_ratio is not None and remaining_ratio <= 0)
+    )
     refresh_time = item.get('quota_checked_at') or item.get('last_refresh') or item.get('modtime') or item.get('created_at')
     return {
         'name': item.get('name') or item.get('id'),
@@ -997,9 +1039,14 @@ def load_cpa_warden_accounts(target: dict[str, Any]) -> dict[str, dict[str, Any]
         status_message = r.get('status_message') or ''
         error_type = extract_status_message_error_type(status_message)
         invalid_401 = (str(api_status_code or '') == '401') or bool(r.get('unavailable')) or error_type in {'401', 'unauthorized', 'invalid_api_key', 'token_expired'}
-        quota_limited = (not invalid_401) and (bool(r.get('is_quota_limited')) or bool(r.get('usage_limit_reached')) or error_type in {'usage_limit_reached', 'rate_limit', 'quota'})
         ratio_value = r.get('quota_remaining_ratio') if r.get('quota_remaining_ratio') is not None else r.get('usage_remaining_ratio')
         remaining_ratio = round(float(ratio_value) * 100, 2) if ratio_value is not None else None
+        quota_limited = (not invalid_401) and (
+            bool(r.get('is_quota_limited'))
+            or bool(r.get('usage_limit_reached'))
+            or error_type in {'usage_limit_reached', 'rate_limit', 'quota'}
+            or (remaining_ratio is not None and remaining_ratio <= 0)
+        )
         out[key] = {
             'name': r.get('name'),
             'email': r.get('email'),

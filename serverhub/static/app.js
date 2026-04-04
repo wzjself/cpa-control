@@ -55,7 +55,7 @@ const els = {
 };
 
 const fmtPct = n => `${Number(n ?? 0).toFixed(1)}%`;
-const fmtMaybePct = n => (n === null || n === undefined || Number.isNaN(Number(n))) ? '未知' : `${Number(n).toFixed(1)}%`;
+const fmtMaybePct = n => (n === null || n === undefined || Number.isNaN(Number(n))) ? '未返回' : `${Number(n).toFixed(1)}%`;
 const fmtNum = n => new Intl.NumberFormat('zh-CN').format(Number(n || 0));
 const fmtMb = n => `${Number(n || 0).toFixed(1)} MB`;
 const fmtGb = n => `${(Number(n || 0) / 1024).toFixed(2)} GB`;
@@ -405,8 +405,8 @@ function renderCpaCard(cpa) {
       </label>
       <div class="account-chip-top"><strong title="${esc(acc.email || acc.name)}">${esc(acc.email || acc.name)}</strong><span class="${accountStatusClass(acc)}">${accountStatusText(acc)}</span></div>
       <div class="progress mini-remain"><span style="width:${acc.remaining_ratio ?? 0}%"></span></div>
-      <div class="muted">剩余 ${fmtMaybePct(acc.remaining_ratio)}</div>
-      <div class="muted">${acc.quota_reset_at ? `下次额度刷新 ${fmtTime(acc.quota_reset_at)}` : '下次额度刷新时间未知'}</div>
+      <div class="muted">${acc.remaining_ratio === null || acc.remaining_ratio === undefined ? (acc.status === 'active' ? '状态正常 · 未返回具体额度百分比' : `剩余 ${fmtMaybePct(acc.remaining_ratio)}`) : `剩余 ${fmtMaybePct(acc.remaining_ratio)}`}</div>
+      <div class="muted">${acc.quota_reset_at ? `下次额度刷新 ${fmtTime(acc.quota_reset_at)}` : (acc.status === 'active' ? '下次额度刷新时间未返回' : '下次额度刷新时间未知')}</div>
       <div class="muted">${(acc.refreshed_at || acc.quota_checked_at) ? `更新 ${fmtTime(acc.refreshed_at || acc.quota_checked_at)}` : '未取到时间'}</div>
     </div>`;
   }).join('') || '<div class="muted">暂无状态数据，点“刷新并扫描全部 CPA”重试。</div>';
