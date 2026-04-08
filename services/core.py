@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, jsonify, render_template, request, Response
 import requests
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 REQUESTS_SESSION = requests.Session()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "cpa-control.db"

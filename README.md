@@ -57,7 +57,22 @@
 
 ## 快速部署
 
-### 安装
+### 一键安装（推荐）
+```bash
+curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap.sh | bash
+```
+
+默认会安装到：
+```bash
+/opt/cpa-control
+```
+
+如需自定义安装目录：
+```bash
+curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap.sh | CPA_CONTROL_DIR=/your/path bash
+```
+
+### 源码安装
 ```bash
 git clone https://github.com/wzjself/cpa-control.git
 cd cpa-control
