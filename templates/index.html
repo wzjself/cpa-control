@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CPA Control</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260401cpa37">
+  <script src="/static/vendor/chart.umd.js?v=20260401cpa29"></script>
+</head>
+<body>
+  <div class="container">
+    <header class="hero">
+      <div>
+        <h1>CPA Control 😼</h1>
+        <p>聚焦 CPA 目标、凭证额度状态、本地仓库与批量操作</p>
+      </div>
+      <div class="hero-actions"><button id="refreshServerBtn">刷新服务器状态</button><button id="refreshAllBtn">刷新全部</button></div>
+    </header>
+
+    <section class="compact-overview card">
+      <div class="compact-item"><span class="label">健康</span><strong id="healthScore">--</strong></div>
+      <div class="compact-item"><span class="label">CPU</span><strong id="cpuNow">--</strong></div>
+      <div class="compact-item"><span class="label">内存</span><strong id="memNow">--</strong></div>
+      <div class="compact-item"><span class="label">磁盘占用</span><strong id="diskNow">--</strong></div>
+            <div class="compact-item"><span class="label">当前下载 / 上传</span><strong id="netRateNow">--</strong></div>
+      <div class="compact-item wide"><span class="label">总下载 / 总上传</span><strong id="trafficNow">--</strong></div>
+      <div class="compact-item"><span class="label">clirelay 总请求</span><strong id="relayRequestNow">--</strong></div>
+      <div class="compact-item"><span class="label">clirelay 总 Token</span><strong id="relayTokenNow">--</strong></div>
+      <div class="compact-item"><span class="label">RPM / TPM</span><strong id="relayRateNow">--</strong></div>
+    </section>
+
+    <section class="grid charts-grid tighter">
+      <div class="card chart-card">
+        <div class="chart-head">
+          <h3 id="usageChartTitle">CPU / 内存 / 磁盘（24小时）</h3>
+          <div class="range-switch" id="timeRangeSwitch">
+            <button type="button" class="range-btn" data-range="3h">3小时</button>
+            <button type="button" class="range-btn active" data-range="24h">24小时</button>
+            <button type="button" class="range-btn" data-range="7d">7天</button>
+            <button type="button" class="range-btn" data-range="30d">30天</button>
+            <button type="button" class="range-btn" data-range="all">所有时间</button>
+          </div>
+        </div>
+        <canvas id="usageChart"></canvas>
+      </div>
+      <div class="card chart-card">
+        <h3 id="trafficChartTitle">网络上行 / 下载历史（24小时）</h3>
+        <canvas id="trafficChart"></canvas>
+      </div>
+    </section>
+
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h3>凭证仓库</h3>
+          <p>直接上传 JSON 文件入仓库，再批量投放到指定 CPA</p>
+        </div>
+        <div class="cpa-actions">
+          <select id="credentialTargetSelect"></select>
+          <button id="uploadCredentialFilesBtn" type="button">上传凭证文件</button>
+          <input id="credentialFilesInput" type="file" accept=".json,.txt" multiple hidden>
+          <button id="deploySelectedBtn">批量上传到目标 CPA</button>
+        </div>
+      </div>
+
+      <div class="credential-toolbar">
+        <input id="credentialSearchInput" placeholder="搜索仓库凭证 / 目标 CPA">
+        <select id="credentialUploadFilter">
+          <option value="all">全部</option>
+          <option value="uploaded">已上传</option>
+          <option value="pending">未上传</option>
+        </select>
+        <button id="syncCredentialStatusBtn" type="button">刷新仓库</button>
+        <button id="selectAllCredentialsBtn" type="button">全选/反选</button>
+      </div>
+
+      <div class="credential-store-head">
+        <strong id="credentialStoreCount">仓库已有 0 个凭证</strong>
+        <div class="credential-store-tools">
+          <span class="muted" id="credentialStoreHint">支持多选后批量投放</span>
+          <span class="muted" id="autoRefreshHint">自动刷新待运行</span>
+          <button id="toggleCredentialFoldBtn" type="button" class="ghost small-btn">展开</button>
+        </div>
+      </div>
+
+      <div id="credentialStoreList" class="credential-store-list credential-store-folded"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <div>
+          <h3>CPA 管理</h3>
+          <p>直接读取 CPA 后台 auth-files 状态，区分 limit 与 401</p>
+        </div>
+        <div class="cpa-actions">
+          <button id="scanCpasBtn">刷新并扫描全部 CPA</button>
+        </div>
+      </div>
+
+      <div id="cpaList" class="cpa-list"></div>
+
+      <form id="cpaForm" class="cpa-form below-form">
+        <input name="name" placeholder="CPA 名称">
+        <input name="base_url" placeholder="CPA 链接，例如 http://1.2.3.4:25836">
+        <input name="token" placeholder="管理密码 / token">
+        <select name="provider"><option value="codex">codex</option></select>
+        <button type="submit">添加 CPA</button>
+      </form>
+    </section>
+
+  </div>
+
+  <aside id="progressPanel" class="progress-panel" aria-live="polite">
+    <div class="progress-panel-head">
+      <strong>操作状态</strong>
+      <button id="clearProgressLogBtn" type="button" class="ghost small-btn">清空</button>
+    </div>
+    <div id="progressPanelHint" class="muted">显示上传到 CPA、刷新 CPA、仓库同步等实时记录，可滚动回看历史</div>
+    <div id="progressLogList" class="progress-log-list"></div>
+  </aside>
+
+  <div id="uiNotice" class="ui-notice hidden" aria-live="polite">
+    <div class="ui-notice-card">
+      <div class="ui-notice-head">
+        <strong id="uiNoticeTitle">提示</strong>
+        <button id="uiNoticeCloseBtn" type="button" class="ghost small-btn">关闭</button>
+      </div>
+      <pre id="uiNoticeBody"></pre>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=20260401cpa38"></script>
+</body>
+</html>
