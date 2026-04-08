@@ -57,22 +57,50 @@
 
 ## 快速部署
 
-### 一键安装（推荐）
+### 方式一：宿主机一键安装
+> 这不是 Docker 部署，而是直接安装到宿主机目录并创建 Python 虚拟环境。
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap.sh | bash
 ```
 
-默认会安装到：
+默认安装目录：
 ```bash
 /opt/cpa-control
 ```
 
-如需自定义安装目录：
+自定义安装目录：
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap.sh | CPA_CONTROL_DIR=/your/path bash
 ```
 
-### 源码安装
+---
+
+### 方式二：Docker 一键部署
+> 如果你要部署到 Docker，用这条，不要用上面的宿主机安装脚本。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap-docker.sh | bash
+```
+
+默认也是部署到：
+```bash
+/opt/cpa-control
+```
+
+自定义安装目录：
+```bash
+curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap-docker.sh | CPA_CONTROL_DIR=/your/path bash
+```
+
+部署完成后默认访问：
+```bash
+http://127.0.0.1:8321
+```
+
+---
+
+### 方式三：源码安装
 ```bash
 git clone https://github.com/wzjself/cpa-control.git
 cd cpa-control

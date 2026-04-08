@@ -1,0 +1,12 @@
+services:
+  cpa-control:
+    build: .
+    container_name: cpa-control
+    restart: unless-stopped
+    ports:
+      - "${CPA_CONTROL_PORT:-8321}:8321"
+    environment:
+      SERVERHUB_HOST: 0.0.0.0
+      SERVERHUB_PORT: 8321
+    volumes:
+      - ./data:/app/data

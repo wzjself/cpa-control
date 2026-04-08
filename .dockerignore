@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+data/*.db
+data/*.sqlite3
+data/*_quota.json
+data/*_401.json
+data/*_snapshot.json
+data/*.json
+data/*.log
+!data/.gitkeep
+backup_*
