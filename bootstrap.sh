@@ -14,10 +14,39 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+python_venv_ready() {
+  if ! need_cmd python3; then
+    return 1
+  fi
+  local tdir
+  tdir="$(mktemp -d)"
+  if python3 -m venv "$tdir/venv" >/dev/null 2>&1; then
+    rm -rf "$tdir"
+    return 0
+  fi
+  rm -rf "$tdir"
+  return 1
+}
+
 install_pkgs_apt() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y curl ca-certificates python3 python3-venv python3-pip tar
+  apt-get install -y curl ca-certificates python3 python3-pip tar
+  if ! python_venv_ready; then
+    apt-get install -y python3-venv || true
+  fi
+  if ! python_venv_ready; then
+    PY_MINOR="$(python3 - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+    apt-get install -y "python${PY_MINOR}-venv" || true
+  fi
+  if ! python_venv_ready; then
+    echo "python3 venv is still unavailable after install. Please run: apt-get install -y python3-venv or the exact python3.x-venv package." >&2
+    exit 1
+  fi
 }
 
 install_pkgs_yum() {
@@ -35,7 +64,7 @@ install_pkgs_apk() {
 }
 
 ensure_system_deps() {
-  if need_cmd python3 && need_cmd curl && need_cmd tar; then
+  if need_cmd python3 && need_cmd curl && need_cmd tar && python_venv_ready; then
     return 0
   fi
 

@@ -59,6 +59,7 @@
 
 ### 方式一：宿主机一键安装
 > 这不是 Docker 部署，而是直接安装到宿主机目录并创建 Python 虚拟环境。
+> 安装脚本会自动检查 `python3 -m venv` 是否可用；在 Debian/Ubuntu 上若缺失，会自动尝试补装 `python3-venv` 或对应版本的 `python3.x-venv`。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/wzjself/cpa-control/main/bootstrap.sh | bash
