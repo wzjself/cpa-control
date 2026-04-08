@@ -3,17 +3,13 @@ from __future__ import annotations
 import json
 import os
 import urllib.parse
-import shutil
-import signal
 import sqlite3
 import subprocess
-import threading
-import time
 import uuid
 import io
 import zipfile
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,23 +22,15 @@ REQUESTS_SESSION = requests.Session()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "cpa-control.db"
 CPA_WARDEN_DIR = Path("/root/cpa-warden")
-CLIRELAY_DB = Path("/opt/clirelay/data/usage.db")
-CLIRELAY_BASE = os.environ.get("CLIRELAY_BASE", "http://127.0.0.1:8317")
-CLIRELAY_MGMT_KEY = os.environ.get("CLIRELAY_MGMT_KEY", "wzjself")
-SAMPLE_INTERVAL = 60
-RETENTION_DAYS = 30
 PORT = int(os.environ.get("SERVERHUB_PORT", "8321"))
 HOST = os.environ.get("SERVERHUB_HOST", "0.0.0.0")
 WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__, template_folder="templates", static_folder="static")
-stop_event = threading.Event()
 quota_probe_cache: dict[str, dict[str, Any]] = {}
 refresh_progress_store: dict[str, dict[str, Any]] = {}
 QUOTA_CACHE_TTL_SECONDS = 60
-clirelay_summary_cache: dict[str, Any] = {'data': None, 'cached_at_ts': 0.0}
-CLIRELAY_CACHE_TTL_SECONDS = 1.0
 MAX_BULK_WORKERS = 40
 
 
@@ -76,19 +64,6 @@ def init_db() -> None:
         """
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=NORMAL;
-
-        CREATE TABLE IF NOT EXISTS metric_samples (
-            ts TEXT PRIMARY KEY,
-            cpu_percent REAL,
-            mem_percent REAL,
-            disk_percent REAL,
-            net_rx_mb REAL,
-            net_tx_mb REAL,
-            load_1 REAL,
-            load_5 REAL,
-            load_15 REAL
-        );
-
         CREATE TABLE IF NOT EXISTS cpa_targets (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -119,7 +94,6 @@ def init_db() -> None:
             archived INTEGER NOT NULL DEFAULT 0
         );
 
-        CREATE INDEX IF NOT EXISTS idx_metric_samples_ts ON metric_samples(ts);
         CREATE INDEX IF NOT EXISTS idx_cpa_targets_sort_order ON cpa_targets(sort_order);
         CREATE INDEX IF NOT EXISTS idx_credential_store_archived_uploaded_at ON credential_store(archived, uploaded_at DESC);
         CREATE INDEX IF NOT EXISTS idx_credential_store_last_target_id ON credential_store(last_target_id);
@@ -139,339 +113,6 @@ def init_db() -> None:
     if 'upload_error_detail' not in cols: conn.execute("ALTER TABLE credential_store ADD COLUMN upload_error_detail TEXT NOT NULL DEFAULT ''")
     conn.commit()
     conn.close()
-
-
-def cleanup_old_metrics() -> None:
-    cutoff = (utc_now() - timedelta(days=RETENTION_DAYS)).isoformat()
-    conn = get_conn()
-    conn.execute("DELETE FROM metric_samples WHERE ts < ?", (cutoff,))
-    conn.commit()
-    conn.close()
-
-
-def read_proc_stat() -> tuple[list[int], int]:
-    with open('/proc/stat', 'r', encoding='utf-8') as f:
-        parts = f.readline().split()[1:]
-    vals = [int(x) for x in parts]
-    idle = vals[3] + vals[4]
-    total = sum(vals)
-    return vals, total - idle
-
-
-def cpu_percent_sample(interval: float = 0.15) -> float:
-    _, busy1 = read_proc_stat()
-    with open('/proc/stat', 'r', encoding='utf-8') as f:
-        parts1 = [int(x) for x in f.readline().split()[1:]]
-    total1 = sum(parts1)
-    idle1 = parts1[3] + parts1[4]
-    time.sleep(interval)
-    with open('/proc/stat', 'r', encoding='utf-8') as f:
-        parts2 = [int(x) for x in f.readline().split()[1:]]
-    total2 = sum(parts2)
-    idle2 = parts2[3] + parts2[4]
-    dt = max(total2 - total1, 1)
-    didle = idle2 - idle1
-    return round(max(0.0, min(100.0, 100.0 * (dt - didle) / dt)), 2)
-
-
-def mem_percent() -> float:
-    info = {}
-    with open('/proc/meminfo', 'r', encoding='utf-8') as f:
-        for line in f:
-            key, val = line.split(':', 1)
-            info[key] = int(val.strip().split()[0])
-    total = info.get('MemTotal', 1)
-    available = info.get('MemAvailable', 0)
-    used = total - available
-    return round(used * 100 / total, 2)
-
-
-def disk_percent(path: str = '/') -> float:
-    usage = shutil.disk_usage(path)
-    return round(usage.used * 100 / max(usage.total, 1), 2)
-
-
-def net_mb() -> tuple[float, float]:
-    with open('/proc/net/dev', 'r', encoding='utf-8') as f:
-        lines = f.readlines()[2:]
-    rx = tx = 0
-    for line in lines:
-        iface, data = line.split(':', 1)
-        iface = iface.strip()
-        if iface == 'lo':
-            continue
-        parts = data.split()
-        rx += int(parts[0])
-        tx += int(parts[8])
-    return round(rx / 1024 / 1024, 2), round(tx / 1024 / 1024, 2)
-
-
-def top_processes(limit: int = 5) -> list[dict[str, Any]]:
-    cmd = "ps -eo pid,comm,%cpu,%mem --sort=-%cpu | head -n 6"
-    out = subprocess.check_output(['sh', '-lc', cmd], text=True)
-    rows = []
-    for line in out.strip().splitlines()[1:]:
-        parts = line.split(None, 3)
-        if len(parts) == 4:
-            rows.append({
-                'pid': int(parts[0]),
-                'name': parts[1],
-                'cpu': float(parts[2]),
-                'mem': float(parts[3]),
-            })
-    return rows[:limit]
-
-
-def compute_health(sample: dict[str, Any], clirelay: dict[str, Any] | None = None) -> int:
-    relay_health = (clirelay or {}).get('health_score')
-    if relay_health is not None:
-        return int(relay_health)
-    system = (clirelay or {}).get('system') or {}
-    cpu = float(system.get('system_cpu_pct', sample.get('cpu_percent', 0.0)) or 0.0)
-    mem = float(system.get('system_mem_pct', sample.get('mem_percent', 0.0)) or 0.0)
-    disk = float(system.get('disk_pct', sample.get('disk_percent', 0.0)) or 0.0)
-    raw = 100 - (cpu * 0.35 + mem * 0.35 + disk * 0.30)
-    return int(max(0, min(100, round(raw))))
-
-
-def collect_sample() -> dict[str, Any]:
-    rx_mb, tx_mb = net_mb()
-    load1, load5, load15 = os.getloadavg()
-    return {
-        'ts': now_iso(),
-        'cpu_percent': cpu_percent_sample(),
-        'mem_percent': mem_percent(),
-        'disk_percent': disk_percent('/'),
-        'net_rx_mb': rx_mb,
-        'net_tx_mb': tx_mb,
-        'load_1': round(load1, 2),
-        'load_5': round(load5, 2),
-        'load_15': round(load15, 2),
-    }
-
-
-def store_sample(sample: dict[str, Any]) -> None:
-    conn = get_conn()
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO metric_samples
-        (ts, cpu_percent, mem_percent, disk_percent, net_rx_mb, net_tx_mb, load_1, load_5, load_15)
-        VALUES (:ts, :cpu_percent, :mem_percent, :disk_percent, :net_rx_mb, :net_tx_mb, :load_1, :load_5, :load_15)
-        """,
-        sample,
-    )
-    conn.commit()
-    conn.close()
-
-
-def sampler_loop() -> None:
-    while not stop_event.is_set():
-        try:
-            store_sample(collect_sample())
-            cleanup_old_metrics()
-        except Exception as exc:
-            print('sampler error:', exc, flush=True)
-        stop_event.wait(SAMPLE_INTERVAL)
-
-
-def downsample_history(rows: list[dict[str, Any]], max_points: int | None = None) -> list[dict[str, Any]]:
-    if not max_points or max_points <= 0 or len(rows) <= max_points:
-        return rows
-    if max_points == 1:
-        return [rows[-1]]
-    step = (len(rows) - 1) / (max_points - 1)
-    sampled = []
-    used = set()
-    for i in range(max_points):
-        idx = int(round(i * step))
-        idx = max(0, min(len(rows) - 1, idx))
-        if idx in used:
-            continue
-        used.add(idx)
-        sampled.append(rows[idx])
-    if sampled[-1] is not rows[-1]:
-        sampled[-1] = rows[-1]
-    return sampled
-
-
-def get_metric_history(hours: int | None = 24, max_points: int | None = None) -> list[dict[str, Any]]:
-    conn = get_conn()
-    if hours is None:
-        rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples ORDER BY ts").fetchall()]
-    else:
-        since = (utc_now() - timedelta(hours=hours)).isoformat()
-        rows = [dict(r) for r in conn.execute("SELECT * FROM metric_samples WHERE ts >= ? ORDER BY ts", (since,)).fetchall()]
-    conn.close()
-    return downsample_history(rows, max_points=max_points)
-
-
-def get_metric_summary(history_hours: int | None = 24, clirelay: dict[str, Any] | None = None, include_history: bool = True, history_max_points: int | None = None) -> dict[str, Any]:
-    history = get_metric_history(history_hours, max_points=history_max_points)
-    latest = history[-1] if history else collect_sample()
-    totals = {'rx_mb': 0.0, 'tx_mb': 0.0}
-    if len(history) >= 2:
-        rx_total = 0.0
-        tx_total = 0.0
-        for prev, cur in zip(history, history[1:]):
-            try:
-                rx_diff = float(cur.get('net_rx_mb') or 0) - float(prev.get('net_rx_mb') or 0)
-                tx_diff = float(cur.get('net_tx_mb') or 0) - float(prev.get('net_tx_mb') or 0)
-            except Exception:
-                continue
-            if rx_diff > 0:
-                rx_total += rx_diff
-            if tx_diff > 0:
-                tx_total += tx_diff
-        totals['rx_mb'] = round(rx_total, 2)
-        totals['tx_mb'] = round(tx_total, 2)
-    current_rx_kbps = 0.0
-    current_tx_kbps = 0.0
-    if len(history) >= 2:
-        prev, cur = history[-2], history[-1]
-        prev_ts = datetime.fromisoformat(prev['ts']).timestamp()
-        cur_ts = datetime.fromisoformat(cur['ts']).timestamp()
-        seconds = max(cur_ts - prev_ts, 1)
-        current_rx_kbps = round(max(0.0, (float(cur['net_rx_mb']) - float(prev['net_rx_mb'])) * 1024 / seconds), 2)
-        current_tx_kbps = round(max(0.0, (float(cur['net_tx_mb']) - float(prev['net_tx_mb'])) * 1024 / seconds), 2)
-    return {
-        'latest': latest,
-        'health': compute_health(latest, clirelay),
-        'traffic_24h': totals,
-        'current_net_kbps': {'rx': current_rx_kbps, 'tx': current_tx_kbps},
-        'history': history if include_history else [],
-    }
-
-
-def get_clirelay_summary(force: bool = False) -> dict[str, Any]:
-    now_ts = time.time()
-    cached = clirelay_summary_cache.get('data')
-    cached_at_ts = float(clirelay_summary_cache.get('cached_at_ts') or 0)
-    if (not force) and cached is not None and (now_ts - cached_at_ts) < CLIRELAY_CACHE_TTL_SECONDS:
-        return dict(cached)
-
-    try:
-        headers = {'x-management-key': CLIRELAY_MGMT_KEY}
-        endpoints = {
-            'dash': f'{CLIRELAY_BASE}/v0/management/dashboard-summary?days=7',
-            'chart': f'{CLIRELAY_BASE}/v0/management/usage/chart-data?days=7',
-            'system': f'{CLIRELAY_BASE}/v0/management/system-stats',
-            'auth_files': f'{CLIRELAY_BASE}/v0/management/auth-files',
-        }
-        responses: dict[str, requests.Response] = {}
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            future_map = {pool.submit(REQUESTS_SESSION.get, url, headers=headers, timeout=3): key for key, url in endpoints.items()}
-            for future in as_completed(future_map):
-                responses[future_map[future]] = future.result()
-        dash = responses.get('dash')
-        chart = responses.get('chart')
-        system = responses.get('system')
-        auth_files = responses.get('auth_files')
-        if dash and chart and system and dash.ok and chart.ok and system.ok:
-            dash_j = dash.json()
-            chart_j = chart.json()
-            sys_j = system.json()
-            auth_j = auth_files.json() if (auth_files and auth_files.ok) else {'files': []}
-            kpi = dash_j.get('kpi', {})
-            active = sys_j.get('active_concurrency', []) or []
-            rpm_now = sum(int(x.get('rpm', 0) or 0) for x in active)
-            tpm_now = sum(int(x.get('tpm', 0) or 0) for x in active)
-            sys_cpu = float(sys_j.get('system_cpu_pct', 0) or 0)
-            sys_mem = float(sys_j.get('system_mem_pct', 0) or 0)
-            sys_disk = float(sys_j.get('disk_pct', 0) or 0)
-            health_score = int(max(0, min(100, round(100 - (sys_cpu * 0.35 + sys_mem * 0.35 + sys_disk * 0.30)))))
-            result = {
-                'available': True,
-                'source': 'management-api',
-                'request_count': int(kpi.get('total_requests', 0) or 0),
-                'success_rate': round(kpi.get('success_rate', 0), 2),
-                'input_tokens': int(kpi.get('input_tokens', 0) or 0),
-                'output_tokens': int(kpi.get('output_tokens', 0) or 0),
-                'cached_tokens': int(kpi.get('cached_tokens', 0) or 0),
-                'total_tokens': int(kpi.get('total_tokens', 0) or 0),
-                'rpm': rpm_now,
-                'tpm': tpm_now,
-                'health_score': health_score,
-                'top_api_keys': chart_j.get('apikey_distribution', []),
-                'recent': [
-                    {'minute': x.get('date', ''), 'requests': x.get('requests', 0), 'tokens': (x.get('input_tokens', 0) + x.get('output_tokens', 0))}
-                    for x in chart_j.get('daily_series', [])
-                ],
-                'system': sys_j,
-                'counts': dash_j.get('counts', {}),
-                'auth_files': auth_j.get('files', []),
-                'models': chart_j.get('model_distribution', []),
-            }
-            clirelay_summary_cache['data'] = dict(result)
-            clirelay_summary_cache['cached_at_ts'] = now_ts
-            return result
-    except Exception:
-        pass
-
-    if not CLIRELAY_DB.exists():
-        result = {'available': False, 'request_count': 0, 'total_tokens': 0, 'rpm': 0, 'tpm': 0}
-        clirelay_summary_cache['data'] = dict(result)
-        clirelay_summary_cache['cached_at_ts'] = now_ts
-        return result
-    conn = sqlite3.connect(CLIRELAY_DB)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    total = dict(cur.execute(
-        """
-        SELECT COUNT(*) AS request_count,
-               SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END) AS success_count,
-               SUM(COALESCE(input_tokens,0)) AS input_tokens,
-               SUM(COALESCE(output_tokens,0)) AS output_tokens,
-               SUM(COALESCE(cached_tokens,0)) AS cached_tokens,
-               SUM(COALESCE(total_tokens,0)) AS total_tokens
-        FROM request_logs
-        """
-    ).fetchone())
-    rpm = dict(cur.execute(
-        "SELECT COUNT(*) AS rpm, SUM(COALESCE(total_tokens,0)) AS tpm FROM request_logs WHERE timestamp >= datetime('now','-1 minute')"
-    ).fetchone())
-    by_key = [dict(r) for r in cur.execute(
-        """
-        SELECT COALESCE(api_key_name,'未命名') AS api_key_name,
-               COUNT(*) AS requests,
-               SUM(COALESCE(total_tokens,0)) AS total_tokens,
-               SUM(CASE WHEN failed = 0 THEN 1 ELSE 0 END) AS success_count
-        FROM request_logs
-        GROUP BY api_key_name
-        ORDER BY requests DESC
-        LIMIT 10
-        """
-    ).fetchall()]
-    recent = [dict(r) for r in cur.execute(
-        """
-        SELECT substr(timestamp,1,16) AS minute,
-               COUNT(*) AS requests,
-               SUM(COALESCE(total_tokens,0)) AS tokens
-        FROM request_logs
-        WHERE timestamp >= datetime('now','-24 hours')
-        GROUP BY substr(timestamp,1,16)
-        ORDER BY minute
-        """
-    ).fetchall()]
-    conn.close()
-    request_count = total.get('request_count') or 0
-    success_count = total.get('success_count') or 0
-    result = {
-        'available': True,
-        'source': 'usage-db',
-        'request_count': request_count,
-        'success_rate': round((success_count / request_count * 100.0), 2) if request_count else 0,
-        'input_tokens': total.get('input_tokens') or 0,
-        'output_tokens': total.get('output_tokens') or 0,
-        'cached_tokens': total.get('cached_tokens') or 0,
-        'total_tokens': total.get('total_tokens') or 0,
-        'rpm': rpm.get('rpm') or 0,
-        'tpm': rpm.get('tpm') or 0,
-        'top_api_keys': by_key,
-        'recent': recent,
-    }
-    clirelay_summary_cache['data'] = dict(result)
-    clirelay_summary_cache['cached_at_ts'] = now_ts
-    return result
 
 
 def get_cpa_usage_stats(target: dict[str, Any]) -> dict[str, Any]:
@@ -1318,41 +959,9 @@ def index():
     return render_template('index.html')
 
 
-@app.get('/api/overview')
-def api_overview():
-    range_key = request.args.get('range', '24h')
-    include_cpas = request.args.get('include_cpas', '1') != '0'
-    include_clirelay = request.args.get('include_clirelay', '1') != '0'
-    hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
-    points_map = {'3h': 90, '24h': 120, '7d': 160, '30d': 160, 'all': 200}
-    history_hours = hours_map.get(range_key, 24)
-    history_max_points = points_map.get(range_key, 120)
-    clirelay = get_clirelay_summary() if include_clirelay else None
-    payload = {
-        'server': get_metric_summary(history_hours, clirelay, include_history=True, history_max_points=history_max_points),
-        'range': range_key,
-    }
-    if include_clirelay:
-        payload['clirelay'] = clirelay
-    if include_cpas:
-        payload['cpas'] = [cpa_summary(t, live=False) for t in load_cpas()]
-    return jsonify(payload)
-
-
-@app.get('/api/server-status')
-def api_server_status():
-    range_key = request.args.get('range', '24h')
-    include_history = request.args.get('include_history', '0') == '1'
-    hours_map = {'3h': 3, '24h': 24, '7d': 24 * 7, '30d': 24 * 30, 'all': None}
-    points_map = {'3h': 90, '24h': 120, '7d': 160, '30d': 160, 'all': 200}
-    history_hours = hours_map.get(range_key, 24)
-    history_max_points = points_map.get(range_key, 120) if include_history else None
-    clirelay = get_clirelay_summary()
-    return jsonify({
-        'server': get_metric_summary(history_hours, clirelay, include_history=include_history, history_max_points=history_max_points),
-        'clirelay': clirelay,
-        'range': range_key,
-    })
+@app.get('/api/cpas/overview')
+def api_cpas_overview():
+    return jsonify({'cpas': [cpa_summary(t, live=False) for t in load_cpas()]})
 
 
 @app.post('/api/cpas')
@@ -2078,25 +1687,6 @@ def api_sync_credential_upload_status():
         credentials.append(item)
     return jsonify({'ok': True, 'matched': matched, 'credentials': credentials, 'cpas': cpas, 'mode': 'snapshot-cache'})
 
-@app.get('/api/history')
-def api_history():
-    hours = int(request.args.get('hours', '24'))
-    return jsonify({'history': get_metric_history(hours)})
-
-
-def start_threads() -> None:
-    th = threading.Thread(target=sampler_loop, daemon=True)
-    th.start()
-
-
-def handle_sigterm(*_: Any) -> None:
-    stop_event.set()
-
-
 if __name__ == '__main__':
     init_db()
-    signal.signal(signal.SIGTERM, handle_sigterm)
-    signal.signal(signal.SIGINT, handle_sigterm)
-    store_sample(collect_sample())
-    start_threads()
     app.run(host=HOST, port=PORT, debug=False)

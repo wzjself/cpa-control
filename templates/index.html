@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CPA Control</title>
   <link rel="stylesheet" href="/static/style.css?v=20260401cpa37">
-  <script src="/static/vendor/chart.umd.js?v=20260401cpa29"></script>
 </head>
 <body>
   <div class="container">
@@ -14,40 +13,8 @@
         <h1>CPA Control 😼</h1>
         <p>聚焦 CPA 目标、凭证额度状态、本地仓库与批量操作</p>
       </div>
-      <div class="hero-actions"><button id="refreshServerBtn">刷新服务器状态</button><button id="refreshAllBtn">刷新全部</button></div>
+      <div class="hero-actions"><button id="refreshAllBtn">刷新全部</button></div>
     </header>
-
-    <section class="compact-overview card">
-      <div class="compact-item"><span class="label">健康</span><strong id="healthScore">--</strong></div>
-      <div class="compact-item"><span class="label">CPU</span><strong id="cpuNow">--</strong></div>
-      <div class="compact-item"><span class="label">内存</span><strong id="memNow">--</strong></div>
-      <div class="compact-item"><span class="label">磁盘占用</span><strong id="diskNow">--</strong></div>
-            <div class="compact-item"><span class="label">当前下载 / 上传</span><strong id="netRateNow">--</strong></div>
-      <div class="compact-item wide"><span class="label">总下载 / 总上传</span><strong id="trafficNow">--</strong></div>
-      <div class="compact-item"><span class="label">clirelay 总请求</span><strong id="relayRequestNow">--</strong></div>
-      <div class="compact-item"><span class="label">clirelay 总 Token</span><strong id="relayTokenNow">--</strong></div>
-      <div class="compact-item"><span class="label">RPM / TPM</span><strong id="relayRateNow">--</strong></div>
-    </section>
-
-    <section class="grid charts-grid tighter">
-      <div class="card chart-card">
-        <div class="chart-head">
-          <h3 id="usageChartTitle">CPU / 内存 / 磁盘（24小时）</h3>
-          <div class="range-switch" id="timeRangeSwitch">
-            <button type="button" class="range-btn" data-range="3h">3小时</button>
-            <button type="button" class="range-btn active" data-range="24h">24小时</button>
-            <button type="button" class="range-btn" data-range="7d">7天</button>
-            <button type="button" class="range-btn" data-range="30d">30天</button>
-            <button type="button" class="range-btn" data-range="all">所有时间</button>
-          </div>
-        </div>
-        <canvas id="usageChart"></canvas>
-      </div>
-      <div class="card chart-card">
-        <h3 id="trafficChartTitle">网络上行 / 下载历史（24小时）</h3>
-        <canvas id="trafficChart"></canvas>
-      </div>
-    </section>
 
 
     <section class="card">

@@ -9,6 +9,7 @@
 - 批量删除、导出、保存到本地仓库
 - 从本地仓库批量投放到指定 CPA
 - 查看批量任务进度
+- 不包含服务器总览、图表、历史指标、clirelay 仪表盘
 
 默认运行端口：`8321`
 
@@ -89,13 +90,11 @@ http://127.0.0.1:8321
 ```bash
 export SERVERHUB_HOST=0.0.0.0
 export SERVERHUB_PORT=8321
-export CLIRELAY_BASE=http://127.0.0.1:8317
-export CLIRELAY_MGMT_KEY=your_key
 ```
 
 说明：
-- `SERVERHUB_HOST / SERVERHUB_PORT` 目前是兼容历史代码保留的变量名
-- 如后续需要，可以继续重构为 `CPA_CONTROL_HOST / CPA_CONTROL_PORT`
+- 当前仅保留应用监听地址和端口
+- 变量名为兼容历史代码保留，后续可再改名
 
 ---
 
