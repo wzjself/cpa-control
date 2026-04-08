@@ -98,23 +98,51 @@ export SERVERHUB_PORT=8321
 
 ---
 
-## 目录结构
+## 当前项目结构
 
 ```bash
 cpa-control/
-├── app.py
+├── app.py                 # Flask 入口，注册页面与 API 路由
+├── services/
+│   ├── __init__.py
+│   └── core.py            # 核心业务：CPA、凭证仓库、额度识别、批量任务
+├── static/                # 前端脚本与样式
+├── templates/             # HTML 模板
+├── data/                  # 运行时数据目录
+├── README.md
 ├── requirements.txt
-├── install.sh
-├── static/
-├── templates/
-└── data/
+└── install.sh
 ```
 
-其中：
-- `data/` 为运行时目录
-- 本地数据库、日志、快照、配额缓存文件均不应提交 Git
+### 模块职责
+
+#### app.py
+负责：
+- Flask 应用入口
+- 页面路由
+- API 路由注册
+- 启动服务
+
+#### services/core.py
+负责：
+- CPA 目标管理
+- 目标凭证读取
+- 额度/状态识别
+- 本地凭证仓库管理
+- 批量上传、删除、导出、保存到仓库
+- 进度任务数据维护
+
+### 后续可继续细拆的方向
+如果后面项目继续变大，建议再拆成：
+- `services/cpa_service.py`
+- `services/credential_service.py`
+- `services/task_service.py`
+- `services/quota_service.py`
+
+当前这版先保持“可维护 + 可运行”，避免一次拆太散影响稳定性。
 
 ---
+
 
 ## 适用场景
 - 集中管理多个 CPA 节点
